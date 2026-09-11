@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PIA WireGuard Config Generator</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 420px; margin: 3rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.25rem; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input[type=text], input[type=password], select { width: 100%; padding: 0.4rem; margin-top: 0.25rem; box-sizing: border-box; }
+  .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; }
+  .checkbox-row label { margin: 0; font-weight: normal; }
+  .latency-row { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+  .latency-row input { margin-top: 0; }
+  .latency-row button { margin-top: 0; padding: 0.4rem 0.8rem; }
+  .hint { font-size: 0.8rem; color: #666; margin-top: 0.25rem; }
+  button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+  button.secondary { margin-top: 0.6rem; margin-left: 0.5rem; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #status { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
+  #status.error { color: #b00020; }
+  #status.ok { color: #1a7f37; }
+</style>
+</head>
+<body>
+<h1>PIA WireGuard Config Generator</h1>
+<form id="form">
+  <label for="username">PIA username</label>
+  <input type="text" id="username" autocomplete="username" required>
+
+  <label for="password">PIA password</label>
+  <input type="password" id="password" autocomplete="current-password" required>
+
+  <label for="maxLatency">Max latency (ms)</label>
+  <div class="latency-row">
+    <input type="number" id="maxLatency" value="50" min="1" step="1">
+    <button type="button" id="rescan">Rescan</button>
+  </div>
+  <div class="hint">Regions slower than this are marked unreachable. 50ms is the same default the CLI scripts use; raise it if your connection has high latency.</div>
+
+  <label for="region">Region</label>
+  <select id="region" required></select>
+
+  <div class="checkbox-row">
+    <input type="checkbox" id="includeDns" checked>
+    <label for="includeDns">Include DNS</label>
+  </div>
+
+  <button type="submit">Generate &amp; Test Config</button>
+  <div class="hint">Generates the config, then briefly brings up a real WireGuard tunnel on this Mac to confirm it actually handshakes before handing you the file. A native macOS authorization prompt (Touch ID capable) will appear — your password never passes through this page or server. Can take up to a minute.</div>
+</form>
+<div id="status"></div>
+
+<script>
+const regionSelect = document.getElementById('region');
+const maxLatencyInput = document.getElementById('maxLatency');
+const status = document.getElementById('status');
+
+async function loadRegions() {
+  regionSelect.disabled = true;
+  regionSelect.innerHTML = '<option>Testing server latency…</option>';
+  try {
+    const maxLatencyMs = maxLatencyInput.value || 50;
+    const res = await fetch('/api/regions?maxLatencyMs=' + encodeURIComponent(maxLatencyMs));
+    if (!res.ok) throw new Error(await res.text());
+    const regions = await res.json();
+    regionSelect.innerHTML = regions.map(r =>
+      `<option value="${r.id}">${r.name}${r.port_forward ? ' (PF)' : ''} — ${r.latency_ms != null ? r.latency_ms + 'ms' : 'unreachable'}</option>`
+    ).join('');
+  } catch (err) {
+    status.textContent = 'Could not load region list: ' + err.message;
+    status.className = 'error';
+  } finally {
+    regionSelect.disabled = false;
+  }
+}
+
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const submitBtn = document.querySelector('button[type=submit]');
+  status.className = '';
+  status.textContent = 'Generating, then connecting to test it… a native macOS authorization prompt may appear. This can take up to a minute.';
+  submitBtn.disabled = true;
+
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const region = regionSelect.value;
+  const includeDns = document.getElementById('includeDns').checked;
+
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, region, includeDns }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'request failed');
+
+    const blob = new Blob([result.conf], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    status.textContent = (result.test.ok ? 'Downloaded and verified: ' : 'Downloaded, but test failed: ') + result.test.message;
+    status.className = result.test.ok ? 'ok' : 'error';
+  } catch (err) {
+    status.textContent = 'Failed: ' + err.message;
+    status.className = 'error';
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+document.getElementById('rescan').addEventListener('click', loadRegions);
+
+loadRegions();
+</script>
+</body>
+</html>
