@@ -30,10 +30,17 @@ VALIDATE_HELPER = Path(__file__).resolve().parent / "validate_helper.sh"
 
 SERVERLIST_URL = "https://serverlist.piaservers.net/vpninfo/servers/v6"
 TOKEN_URL = "https://www.privateinternetaccess.com/api/client/v2/token"
+# Cloudflare (fronting both PIA hosts) blocks Python's default "Python-urllib/3.x"
+# User-Agent with a 403, even for requests that are otherwise identical to curl's
+# (which get_token.sh uses, and which passes) — so PIA_USER/PIA_PASS with correct
+# credentials would still fail. Any non-blocked UA works; curl's is the simplest
+# match for the reference implementation.
+USER_AGENT = "curl/8.7.1"
 
 
 def fetch_regions():
-    with urllib.request.urlopen(SERVERLIST_URL, timeout=15) as resp:
+    req = urllib.request.Request(SERVERLIST_URL, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=15) as resp:
         first_line = resp.read().decode("utf-8").splitlines()[0]
     data = json.loads(first_line)
     return [r for r in data["regions"] if r.get("servers", {}).get("wg")]
@@ -86,7 +93,10 @@ def multipart_body(fields):
 def fetch_token(username, password):
     body, content_type = multipart_body({"username": username, "password": password})
     req = urllib.request.Request(
-        TOKEN_URL, data=body, method="POST", headers={"Content-Type": content_type}
+        TOKEN_URL,
+        data=body,
+        method="POST",
+        headers={"Content-Type": content_type, "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -157,10 +167,13 @@ def validate_conf(conf_text):
     only way to actually prove a config connects — there's no way to check a
     handshake without establishing one. The whole sequence runs as one script
     (validate_helper.sh) behind a single admin-privileges prompt."""
-    fd, conf_path = tempfile.mkstemp(prefix="pia-validate-", suffix=".conf")
-    os.close(fd)
+    # wg-quick requires the config's basename (minus .conf) to be a valid
+    # interface name: 1-15 chars matching [a-zA-Z0-9_=+.-]. "pia-" + 8 hex
+    # chars (12 total) fits with room to spare — a mkstemp-style random
+    # suffix on a "pia-validate-" prefix does not (21+ chars).
+    iface = "pia-" + uuid.uuid4().hex[:8]
+    conf_path = str(Path(tempfile.gettempdir()) / f"{iface}.conf")
     Path(conf_path).write_text(conf_text, encoding="utf-8")
-    iface = Path(conf_path).stem
     try:
         result = run_admin(["bash", str(VALIDATE_HELPER), conf_path, iface])
         if "User canceled" in (result.stderr or ""):
