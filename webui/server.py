@@ -255,8 +255,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, payload, "application/json")
             except Exception as e:
                 self._send(502, f"Could not fetch region list: {e}")
+        elif parsed.path == "/api/router/targets":
+            self._handle_router_targets()
         else:
             self._send(404, "Not found")
+
+    def _handle_router_targets(self):
+        # Networks + devices available to route through a WireGuard client,
+        # for the "route traffic through this VPN" picker. Needs a session
+        # from a prior test-login (see _get_router_session).
+        session = _get_router_session()
+        if session is None:
+            self._send(
+                200,
+                json.dumps({"ok": False, "needsLogin": True, "message": "Please Test Login first (or again — the session expired)."}),
+                "application/json",
+            )
+            return
+        try:
+            networks = router_push.list_networks(session["opener"], session["csrf_token"], session["base_url"])
+            devices = router_push.list_devices(session["opener"], session["csrf_token"], session["base_url"])
+            self._send(200, json.dumps({"ok": True, "networks": networks, "devices": devices}), "application/json")
+        except router_push.RouterPushError as e:
+            self._send(200, json.dumps({"ok": False, "message": str(e)}), "application/json")
 
     def do_POST(self):
         if self.path == "/api/generate":
@@ -322,12 +343,25 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}), "application/json")
 
+    def _route_targets_from_request(self, route):
+        # {"type": "NETWORK"|"CLIENT", "id"|"mac": ...} (as the UI sends it)
+        # -> router_push's {"type": ..., "network_id"|"client_mac": ...}
+        targets = []
+        for t in (route or {}).get("targets", []):
+            if t.get("type") == "NETWORK":
+                targets.append({"type": "NETWORK", "network_id": t["id"]})
+            elif t.get("type") == "CLIENT":
+                targets.append({"type": "CLIENT", "client_mac": t["mac"]})
+        return targets
+
     def _handle_router_push(self, apply):
-        # preview (apply=False): builds and returns the exact request body
-        # that would be sent, without sending it. apply (apply=True): the
-        # separate, explicitly-confirmed action that actually sends it --
-        # see HANDOFF.md for why this stays two distinct steps rather than
-        # one push button.
+        # preview (apply=False): builds and returns the exact request
+        # body/bodies that would be sent, without sending them. apply
+        # (apply=True): the separate, explicitly-confirmed action that
+        # actually sends them -- see HANDOFF.md for why this stays two
+        # distinct steps rather than one push button. `route` is optional:
+        # when present, also routes the given networks/devices through the
+        # newly-added client via a second request (trafficroutes).
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -343,23 +377,42 @@ class Handler(BaseHTTPRequestHandler):
             conf = body["conf"]
             filename = body["filename"]
             name = body.get("name") or filename
+            targets = self._route_targets_from_request(body.get("route"))
+            base_url = session["base_url"].rstrip("/")
 
             if not apply:
-                payload = router_push.build_wireguard_client_payload(conf, filename, name)
-                result = {
-                    "ok": True,
-                    "preview": {
-                        "method": "POST",
-                        "url": f"{session['base_url'].rstrip('/')}/proxy/network/api/s/default/rest/networkconf",
-                        "body": payload,
-                    },
+                client_payload = router_push.build_wireguard_client_payload(conf, filename, name)
+                preview = {
+                    "method": "POST",
+                    "url": f"{base_url}/proxy/network/api/s/default/rest/networkconf",
+                    "body": client_payload,
                 }
+                route_preview = None
+                if targets:
+                    route_payload = router_push.build_traffic_route_payload(
+                        name, "<new client's id, assigned after Apply>", targets
+                    )
+                    route_preview = {
+                        "method": "POST",
+                        "url": f"{base_url}/proxy/network/v2/api/site/default/trafficroutes",
+                        "body": route_payload,
+                    }
+                result = {"ok": True, "preview": preview, "routePreview": route_preview}
             else:
                 try:
                     created = router_push.apply_wireguard_client(
                         session["opener"], session["csrf_token"], session["base_url"], conf, filename, name
                     )
                     result = {"ok": True, "message": f"Added to router as \"{created.get('name')}\".", "entry": created}
+                    if targets:
+                        try:
+                            route = router_push.apply_traffic_route(
+                                session["opener"], session["csrf_token"], session["base_url"], name, created["_id"], targets
+                            )
+                            result["message"] += f" Routed {len(targets)} target(s) through it."
+                            result["route"] = route
+                        except router_push.RouterPushError as e:
+                            result["message"] += f" But routing failed: {e}"
                 except router_push.RouterPushError as e:
                     result = {"ok": False, "message": str(e)}
             self._send(200, json.dumps(result), "application/json")
