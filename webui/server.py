@@ -267,8 +267,15 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
             try:
-                router_push.login(body["routerUrl"], body["username"], body["password"])
+                router_push.login(
+                    body["routerUrl"],
+                    body["username"],
+                    body["password"],
+                    mfa_token=body.get("mfaToken", ""),
+                )
                 result = {"ok": True, "message": "Login succeeded — session and CSRF token acquired."}
+            except router_push.MfaRequiredError as e:
+                result = {"ok": False, "mfaRequired": True, "message": str(e)}
             except router_push.RouterLoginError as e:
                 result = {"ok": False, "message": str(e)}
             self._send(200, json.dumps(result), "application/json")

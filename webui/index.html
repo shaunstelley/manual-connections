@@ -58,10 +58,10 @@
 <section class="router">
   <h1>Router login (test only)</h1>
   <div class="hint">
-    Checks that this Mac can reach your router's local Network app and that the
-    documented local-admin login flow works against its real firmware. Does not
-    change any router configuration — pushing the generated config to the router
-    automatically isn't built yet (see HANDOFF.md).
+    Checks that this Mac can reach your router's local Network app and logs in —
+    a Ubiquiti SSO-linked account may need a verification code as a second step.
+    Does not change any router configuration — pushing the generated config to
+    the router automatically isn't built yet (see HANDOFF.md).
   </div>
   <form id="routerForm">
     <label for="routerUrl">Router URL</label>
@@ -72,6 +72,12 @@
 
     <label for="routerPassword">Local admin password</label>
     <input type="password" id="routerPassword" autocomplete="off" required>
+
+    <div id="mfaRow" hidden>
+      <label for="routerMfaToken">Verification code</label>
+      <input type="text" id="routerMfaToken" autocomplete="off" inputmode="numeric">
+      <div class="hint">This account needs a verification code to finish logging in. Check email/authenticator, enter the code, then submit again.</div>
+    </div>
 
     <button type="submit">Test Login</button>
   </form>
@@ -148,6 +154,8 @@ document.getElementById('rescan').addEventListener('click', loadRegions);
 loadRegions();
 
 const routerStatus = document.getElementById('routerStatus');
+const mfaRow = document.getElementById('mfaRow');
+const mfaTokenInput = document.getElementById('routerMfaToken');
 
 document.getElementById('routerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -159,17 +167,25 @@ document.getElementById('routerForm').addEventListener('submit', async (e) => {
   const routerUrl = document.getElementById('routerUrl').value;
   const username = document.getElementById('routerUsername').value;
   const password = document.getElementById('routerPassword').value;
+  const mfaToken = mfaTokenInput.value;
 
   try {
     const res = await fetch('/api/router/test-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ routerUrl, username, password }),
+      body: JSON.stringify({ routerUrl, username, password, mfaToken }),
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || 'request failed');
     routerStatus.textContent = result.message;
     routerStatus.className = result.ok ? 'ok' : 'error';
+    if (result.mfaRequired) {
+      mfaRow.hidden = false;
+      mfaTokenInput.focus();
+    } else if (result.ok) {
+      mfaRow.hidden = true;
+      mfaTokenInput.value = '';
+    }
   } catch (err) {
     routerStatus.textContent = 'Failed: ' + err.message;
     routerStatus.className = 'error';
