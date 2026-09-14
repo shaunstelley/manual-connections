@@ -26,6 +26,10 @@
   #routerStatus.ok, #pushStatus.ok { color: #1a7f37; }
   #pushPreview { background: #f5f5f5; border: 1px solid #ddd; padding: 0.75rem; margin-top: 1rem; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
   button.danger { background: #b00020; color: white; border: none; }
+  #targetsLists { margin-top: 0.5rem; }
+  .target-row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.2rem 0; font-size: 0.85rem; }
+  .target-row input { margin: 0; }
+  .target-row .sub { color: #888; font-size: 0.75rem; }
 </style>
 </head>
 <body>
@@ -62,8 +66,8 @@
   <div class="hint">
     Checks that this Mac can reach your router's local Network app and logs in —
     a Ubiquiti SSO-linked account may need a verification code as a second step.
-    Does not change any router configuration — pushing the generated config to
-    the router automatically isn't built yet (see HANDOFF.md).
+    Does not change any router configuration by itself — actually pushing the
+    config happens in the "Push to router" section below, as a separate step.
   </div>
   <form id="routerForm">
     <label for="routerUrl">Router URL</label>
@@ -96,10 +100,25 @@
   <label for="pushName">Entry name (shown in the router's UI)</label>
   <input type="text" id="pushName" autocomplete="off">
 
+  <div class="hint" style="margin-top: 1.5rem;">
+    Optional: route specific networks and/or devices through this VPN client
+    once it's added (same as picking them in the router's own "Add WireGuard
+    VPN Client" flow). Leave nothing selected to just add the client with no
+    routing.
+  </div>
+  <button type="button" id="loadTargets">Load networks &amp; devices</button>
+  <div id="targetsStatus" class="hint"></div>
+  <div id="targetsLists" hidden>
+    <label>Networks</label>
+    <div id="networkList"></div>
+    <label>Devices</label>
+    <div id="deviceList"></div>
+  </div>
+
   <button type="button" id="previewPush">Preview Push</button>
   <pre id="pushPreview" hidden></pre>
   <button type="button" id="applyPush" class="danger" disabled>Apply Push</button>
-  <div class="hint">Preview shows the exact request first — including the private key, since it's your own config. Apply is a separate, explicit step that actually writes it to the router.</div>
+  <div class="hint">Preview shows the exact request(s) first — including the private key, since it's your own config. Apply is a separate, explicit step that actually writes to the router.</div>
   <div id="pushStatus"></div>
 </section>
 
@@ -112,8 +131,45 @@ const pushSection = document.getElementById('pushSection');
 const pushPreview = document.getElementById('pushPreview');
 const applyPushBtn = document.getElementById('applyPush');
 const pushStatus = document.getElementById('pushStatus');
+const targetsStatus = document.getElementById('targetsStatus');
+const targetsLists = document.getElementById('targetsLists');
+const networkList = document.getElementById('networkList');
+const deviceList = document.getElementById('deviceList');
 let lastConf = null;
 let lastFilename = null;
+
+function selectedRouteTargets() {
+  const targets = [];
+  networkList.querySelectorAll('input[type=checkbox]:checked').forEach(cb => targets.push({ type: 'NETWORK', id: cb.value }));
+  deviceList.querySelectorAll('input[type=checkbox]:checked').forEach(cb => targets.push({ type: 'CLIENT', mac: cb.value }));
+  return targets;
+}
+
+document.getElementById('loadTargets').addEventListener('click', async () => {
+  targetsStatus.textContent = 'Loading…';
+  targetsStatus.className = 'hint';
+  try {
+    const res = await fetch('/api/router/targets');
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'request failed');
+    if (!result.ok) {
+      targetsStatus.textContent = result.message;
+      targetsStatus.className = result.needsLogin ? 'error' : 'hint';
+      return;
+    }
+    networkList.innerHTML = result.networks.map(n =>
+      `<div class="target-row"><input type="checkbox" value="${n.id}" id="net-${n.id}"><label for="net-${n.id}">${n.name} <span class="sub">${n.purpose || ''}</span></label></div>`
+    ).join('') || '<div class="hint">No networks found.</div>';
+    deviceList.innerHTML = result.devices.map(d =>
+      `<div class="target-row"><input type="checkbox" value="${d.mac}" id="dev-${d.mac}"><label for="dev-${d.mac}">${d.name} <span class="sub">${d.network_name || ''} ${d.is_wired ? '(wired)' : '(wireless)'}</span></label></div>`
+    ).join('') || '<div class="hint">No devices found.</div>';
+    targetsLists.hidden = false;
+    targetsStatus.textContent = `Loaded ${result.networks.length} network(s), ${result.devices.length} device(s).`;
+  } catch (err) {
+    targetsStatus.textContent = 'Failed: ' + err.message;
+    targetsStatus.className = 'error';
+  }
+});
 
 async function loadRegions() {
   regionSelect.disabled = true;
@@ -235,10 +291,11 @@ document.getElementById('previewPush').addEventListener('click', async () => {
   pushStatus.textContent = 'Building preview…';
   applyPushBtn.disabled = true;
   try {
+    const route = { targets: selectedRouteTargets() };
     const res = await fetch('/api/router/push/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value }),
+      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value, route }),
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || 'request failed');
@@ -248,7 +305,11 @@ document.getElementById('previewPush').addEventListener('click', async () => {
       return;
     }
     if (!result.ok) throw new Error(result.message || 'preview failed');
-    pushPreview.textContent = `${result.preview.method} ${result.preview.url}\n\n` + JSON.stringify(result.preview.body, null, 2);
+    let text = `${result.preview.method} ${result.preview.url}\n\n` + JSON.stringify(result.preview.body, null, 2);
+    if (result.routePreview) {
+      text += `\n\n---\n\n${result.routePreview.method} ${result.routePreview.url}\n\n` + JSON.stringify(result.routePreview.body, null, 2);
+    }
+    pushPreview.textContent = text;
     pushPreview.hidden = false;
     pushStatus.textContent = 'Preview built. Review it, then click Apply Push to actually send it.';
     pushStatus.className = '';
@@ -260,7 +321,11 @@ document.getElementById('previewPush').addEventListener('click', async () => {
 });
 
 applyPushBtn.addEventListener('click', async () => {
-  if (!confirm('This adds a new WireGuard VPN Client entry to your router right now. Continue?')) return;
+  const route = { targets: selectedRouteTargets() };
+  const confirmMsg = route.targets.length
+    ? `This adds a new WireGuard VPN Client entry to your router and routes ${route.targets.length} selected network(s)/device(s) through it, right now. Continue?`
+    : 'This adds a new WireGuard VPN Client entry to your router right now (no routing selected). Continue?';
+  if (!confirm(confirmMsg)) return;
   pushStatus.className = '';
   pushStatus.textContent = 'Applying…';
   applyPushBtn.disabled = true;
@@ -268,7 +333,7 @@ applyPushBtn.addEventListener('click', async () => {
     const res = await fetch('/api/router/push/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value }),
+      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value, route }),
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || 'request failed');

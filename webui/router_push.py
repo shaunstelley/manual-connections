@@ -144,6 +144,121 @@ def login(base_url, username, password, mfa_token="", verify_tls=False, timeout=
     return opener, csrf_token
 
 
+def _authed_request(opener, csrf_token, url, method="GET", body=None, timeout=15):
+    """Shared plumbing for every authenticated call after login(): same
+    headers, same error handling (HTTP errors surfaced with the router's own
+    message when it has one, not just a bare status code)."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Accept": "application/json, text/plain, */*", "X-Csrf-Token": csrf_token}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            payload_err = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload_err = {}
+        message = payload_err.get("meta", {}).get("msg") or payload_err.get("message") or f"HTTP {e.code}"
+        raise RouterPushError(f"Request to {url} failed: {message}") from e
+    except urllib.error.URLError as e:
+        raise RouterPushError(f"Could not reach {url}: {e.reason}") from e
+    return json.loads(raw) if raw else {}
+
+
+def list_networks(opener, csrf_token, base_url, site="default", timeout=15):
+    """Networks available as a traffic-route target (type NETWORK).
+
+    NOT captured directly from a real UI action -- neither capture that
+    created a route happened to include the request that lists networks for
+    the picker (it was presumably already loaded from an earlier page).
+    This reuses GET on the same /rest/networkconf collection the client
+    create POSTs to, which is the well-documented convention for "list
+    everything in this collection" in UniFi's legacy REST API. Confident
+    but unverified against this specific router/firmware -- if it 404s or
+    comes back empty, that assumption was wrong and this needs its own
+    real capture (open the network-routing picker fresh after a page
+    reload, with Preserve Log on, same method as every other capture so
+    far).
+    """
+    base_url = base_url.rstrip("/")
+    result = _authed_request(opener, csrf_token, f"{base_url}/proxy/network/api/s/{site}/rest/networkconf")
+    entries = result.get("data", [])
+    # Exclude WireGuard clients themselves (purpose "vpn-client") -- those
+    # aren't something you'd route traffic *to*, they're what you're
+    # routing *through*.
+    return [
+        {"id": e.get("_id"), "name": e.get("name"), "purpose": e.get("purpose")}
+        for e in entries
+        if e.get("purpose") != "vpn-client"
+    ]
+
+
+def list_devices(opener, csrf_token, base_url, site="default", timeout=15):
+    """Active LAN clients/devices available as a traffic-route target (type
+    CLIENT). Captured directly from a real "route by device" action:
+    GET /proxy/network/v2/api/site/default/clients/active?includeTrafficUsage=true&includeUnifiDevices=true
+    """
+    base_url = base_url.rstrip("/")
+    url = f"{base_url}/proxy/network/v2/api/site/{site}/clients/active?includeTrafficUsage=true&includeUnifiDevices=true"
+    result = _authed_request(opener, csrf_token, url)
+    entries = result if isinstance(result, list) else result.get("data", [])
+    return [
+        {
+            "mac": e.get("mac"),
+            "name": e.get("display_name") or e.get("hostname") or e.get("mac"),
+            "network_name": e.get("network_name"),
+            "is_wired": e.get("is_wired"),
+        }
+        for e in entries
+    ]
+
+
+def build_traffic_route_payload(description, network_id, targets):
+    """The exact body shape captured from two real actions: routing by
+    network and routing by device. `network_id` is the *WireGuard client's*
+    own id (from apply_wireguard_client()'s result), not a LAN network --
+    that's what ties this route to that specific client. `targets` is a
+    list of {"type": "NETWORK", "network_id": ...} and/or
+    {"type": "CLIENT", "client_mac": ...} entries -- both confirmed real
+    shapes, and the field is a list so mixing both kinds in one route is
+    presumably fine, though only one kind at a time has actually been
+    tested."""
+    return {
+        "description": description,
+        "enabled": True,
+        "network_id": network_id,
+        "domains": [],
+        "ip_addresses": [],
+        "target_devices": targets,
+        "ip_ranges": [],
+        "matching_target": "INTERNET",
+        "next_hop": "",
+        "kill_switch_enabled": True,
+        "regions": [],
+    }
+
+
+def apply_traffic_route(opener, csrf_token, base_url, description, network_id, targets, site="default", timeout=15):
+    """Actually create the traffic route. Returns the created route (its
+    own _id, plus the fields sent)."""
+    base_url = base_url.rstrip("/")
+    payload = build_traffic_route_payload(description, network_id, targets)
+    result = _authed_request(
+        opener,
+        csrf_token,
+        f"{base_url}/proxy/network/v2/api/site/{site}/trafficroutes",
+        method="POST",
+        body=payload,
+    )
+    if not result.get("_id"):
+        raise RouterPushError(f"Creating traffic route failed: {result}")
+    return result
+
+
 def build_wireguard_client_payload(conf_text, filename, name):
     """The exact body shape captured from a real "Add WireGuard VPN Client"
     action. Shared by preview (display only) and apply (actually sent) so
@@ -170,32 +285,16 @@ def apply_wireguard_client(opener, csrf_token, base_url, conf_text, filename, na
     entry (includes the router's own _id, wireguard_id, ip_subnet, etc.)."""
     base_url = base_url.rstrip("/")
     payload = build_wireguard_client_payload(conf_text, filename, name)
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    result = _authed_request(
+        opener,
+        csrf_token,
         f"{base_url}/proxy/network/api/s/{site}/rest/networkconf",
-        data=body,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-            "X-Csrf-Token": csrf_token,
-        },
+        body=payload,
     )
-    try:
-        with opener.open(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            payload_err = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            payload_err = {}
-        message = payload_err.get("meta", {}).get("msg") or f"HTTP {e.code}"
-        raise RouterPushError(f"Adding VPN client failed: {message}") from e
-    except urllib.error.URLError as e:
-        raise RouterPushError(f"Could not reach router at {base_url}: {e.reason}") from e
-
-    result = json.loads(raw)
+    # This endpoint's older-style REST envelope (meta.rc/data) differs from
+    # apply_traffic_route()'s flat v2-style response -- both confirmed real,
+    # not a bug.
     if result.get("meta", {}).get("rc") != "ok":
         raise RouterPushError(f"Adding VPN client failed: {result.get('meta')}")
     return result["data"][0]
