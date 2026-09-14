@@ -20,10 +20,12 @@
   #status { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
   #status.error { color: #b00020; }
   #status.ok { color: #1a7f37; }
-  section.router { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #ddd; }
-  #routerStatus { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
-  #routerStatus.error { color: #b00020; }
-  #routerStatus.ok { color: #1a7f37; }
+  section.router, section.push { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #ddd; }
+  #routerStatus, #pushStatus { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
+  #routerStatus.error, #pushStatus.error { color: #b00020; }
+  #routerStatus.ok, #pushStatus.ok { color: #1a7f37; }
+  #pushPreview { background: #f5f5f5; border: 1px solid #ddd; padding: 0.75rem; margin-top: 1rem; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  button.danger { background: #b00020; color: white; border: none; }
 </style>
 </head>
 <body>
@@ -84,10 +86,34 @@
   <div id="routerStatus"></div>
 </section>
 
+<section class="push" id="pushSection" hidden>
+  <h1>Push to router</h1>
+  <div class="hint">
+    Adds the generated config above as a new WireGuard VPN Client entry on the
+    router (Settings → VPN in the Network app), using its real "Add WireGuard
+    VPN Client" request. Needs a successful "Test Login" above first.
+  </div>
+  <label for="pushName">Entry name (shown in the router's UI)</label>
+  <input type="text" id="pushName" autocomplete="off">
+
+  <button type="button" id="previewPush">Preview Push</button>
+  <pre id="pushPreview" hidden></pre>
+  <button type="button" id="applyPush" class="danger" disabled>Apply Push</button>
+  <div class="hint">Preview shows the exact request first — including the private key, since it's your own config. Apply is a separate, explicit step that actually writes it to the router.</div>
+  <div id="pushStatus"></div>
+</section>
+
 <script>
 const regionSelect = document.getElementById('region');
 const maxLatencyInput = document.getElementById('maxLatency');
 const status = document.getElementById('status');
+
+const pushSection = document.getElementById('pushSection');
+const pushPreview = document.getElementById('pushPreview');
+const applyPushBtn = document.getElementById('applyPush');
+const pushStatus = document.getElementById('pushStatus');
+let lastConf = null;
+let lastFilename = null;
 
 async function loadRegions() {
   regionSelect.disabled = true;
@@ -141,6 +167,16 @@ document.getElementById('form').addEventListener('submit', async (e) => {
 
     status.textContent = (result.test.ok ? 'Downloaded and verified: ' : 'Downloaded, but test failed: ') + result.test.message;
     status.className = result.test.ok ? 'ok' : 'error';
+
+    if (result.test.ok) {
+      lastConf = result.conf;
+      lastFilename = result.filename;
+      document.getElementById('pushName').value = result.filename.replace(/\.conf$/, '');
+      pushSection.hidden = false;
+      pushPreview.hidden = true;
+      applyPushBtn.disabled = true;
+      pushStatus.textContent = '';
+    }
   } catch (err) {
     status.textContent = 'Failed: ' + err.message;
     status.className = 'error';
@@ -191,6 +227,67 @@ document.getElementById('routerForm').addEventListener('submit', async (e) => {
     routerStatus.className = 'error';
   } finally {
     submitBtn.disabled = false;
+  }
+});
+
+document.getElementById('previewPush').addEventListener('click', async () => {
+  pushStatus.className = '';
+  pushStatus.textContent = 'Building preview…';
+  applyPushBtn.disabled = true;
+  try {
+    const res = await fetch('/api/router/push/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'request failed');
+    if (result.needsLogin) {
+      pushStatus.textContent = result.message;
+      pushStatus.className = 'error';
+      return;
+    }
+    if (!result.ok) throw new Error(result.message || 'preview failed');
+    pushPreview.textContent = `${result.preview.method} ${result.preview.url}\n\n` + JSON.stringify(result.preview.body, null, 2);
+    pushPreview.hidden = false;
+    pushStatus.textContent = 'Preview built. Review it, then click Apply Push to actually send it.';
+    pushStatus.className = '';
+    applyPushBtn.disabled = false;
+  } catch (err) {
+    pushStatus.textContent = 'Failed: ' + err.message;
+    pushStatus.className = 'error';
+  }
+});
+
+applyPushBtn.addEventListener('click', async () => {
+  if (!confirm('This adds a new WireGuard VPN Client entry to your router right now. Continue?')) return;
+  pushStatus.className = '';
+  pushStatus.textContent = 'Applying…';
+  applyPushBtn.disabled = true;
+  try {
+    const res = await fetch('/api/router/push/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conf: lastConf, filename: lastFilename, name: document.getElementById('pushName').value }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'request failed');
+    if (result.needsLogin) {
+      pushStatus.textContent = result.message;
+      pushStatus.className = 'error';
+      return;
+    }
+    pushStatus.textContent = result.message || (result.ok ? 'Applied.' : 'Failed.');
+    pushStatus.className = result.ok ? 'ok' : 'error';
+    if (result.ok) {
+      pushPreview.hidden = true;
+    } else {
+      applyPushBtn.disabled = false;
+    }
+  } catch (err) {
+    pushStatus.textContent = 'Failed: ' + err.message;
+    pushStatus.className = 'error';
+    applyPushBtn.disabled = false;
   }
 });
 </script>

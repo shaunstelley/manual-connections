@@ -8,6 +8,7 @@ import shlex
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -20,6 +21,11 @@ from urllib.parse import urlsplit, parse_qs
 import router_push
 
 PORT = 8765
+# How long a router login session (opener + CSRF token) is reused for
+# without asking to log in again. Kept short since it's live auth material
+# for the router; exists at all only because an SSO account's MFA code is
+# one-time-use, so preview-then-apply can't both freshly call login().
+ROUTER_SESSION_TTL_SECONDS = 600
 # Same default as get_region.sh's MAX_LATENCY=0.05 (50ms) — a server slower than
 # this is treated as unreachable rather than just "slow". User-adjustable in the UI.
 DEFAULT_LATENCY_MS = 50
@@ -197,6 +203,31 @@ def validate_conf(conf_text):
         Path(conf_path).unlink(missing_ok=True)
 
 
+# In-memory only, single-user localhost tool -- never written to disk. Holds
+# at most one session (a fresh login replaces it). Guarded by a lock since
+# ThreadingHTTPServer handles requests concurrently.
+_router_session_lock = threading.Lock()
+_router_session = None  # {"opener", "csrf_token", "base_url", "expires_at"}
+
+
+def _stash_router_session(opener, csrf_token, base_url):
+    global _router_session
+    with _router_session_lock:
+        _router_session = {
+            "opener": opener,
+            "csrf_token": csrf_token,
+            "base_url": base_url,
+            "expires_at": time.time() + ROUTER_SESSION_TTL_SECONDS,
+        }
+
+
+def _get_router_session():
+    with _router_session_lock:
+        if _router_session and _router_session["expires_at"] > time.time():
+            return _router_session
+        return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, content_type="text/plain; charset=utf-8", extra_headers=None):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
@@ -232,6 +263,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_generate()
         elif self.path == "/api/router/test-login":
             self._handle_router_test_login()
+        elif self.path == "/api/router/push/preview":
+            self._handle_router_push(apply=False)
+        elif self.path == "/api/router/push/apply":
+            self._handle_router_push(apply=True)
         else:
             self._send(404, "Not found")
 
@@ -260,24 +295,73 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": str(e)}), "application/json")
 
     def _handle_router_test_login(self):
-        # Only exercises router_push.login() -- confirms this Mac can reach
-        # the router and that the documented auth flow actually works
-        # against its real firmware. Does not touch any router configuration.
+        # Confirms this Mac can reach the router and that login actually
+        # works against its real firmware. Does not touch any router
+        # configuration -- but on success, stashes the session in memory so
+        # a subsequent push preview/apply doesn't need a fresh login (an
+        # SSO account's MFA code is one-time-use, so it can't just log in
+        # again for each step).
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
+            router_url = body["routerUrl"]
             try:
-                router_push.login(
-                    body["routerUrl"],
+                opener, csrf_token = router_push.login(
+                    router_url,
                     body["username"],
                     body["password"],
                     mfa_token=body.get("mfaToken", ""),
                 )
+                _stash_router_session(opener, csrf_token, router_url)
                 result = {"ok": True, "message": "Login succeeded — session and CSRF token acquired."}
             except router_push.MfaRequiredError as e:
                 result = {"ok": False, "mfaRequired": True, "message": str(e)}
             except router_push.RouterLoginError as e:
                 result = {"ok": False, "message": str(e)}
+            self._send(200, json.dumps(result), "application/json")
+        except Exception as e:
+            self._send(400, json.dumps({"error": str(e)}), "application/json")
+
+    def _handle_router_push(self, apply):
+        # preview (apply=False): builds and returns the exact request body
+        # that would be sent, without sending it. apply (apply=True): the
+        # separate, explicitly-confirmed action that actually sends it --
+        # see HANDOFF.md for why this stays two distinct steps rather than
+        # one push button.
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            session = _get_router_session()
+            if session is None:
+                self._send(
+                    200,
+                    json.dumps({"ok": False, "needsLogin": True, "message": "Please Test Login first (or again — the session expired)."}),
+                    "application/json",
+                )
+                return
+
+            conf = body["conf"]
+            filename = body["filename"]
+            name = body.get("name") or filename
+
+            if not apply:
+                payload = router_push.build_wireguard_client_payload(conf, filename, name)
+                result = {
+                    "ok": True,
+                    "preview": {
+                        "method": "POST",
+                        "url": f"{session['base_url'].rstrip('/')}/proxy/network/api/s/default/rest/networkconf",
+                        "body": payload,
+                    },
+                }
+            else:
+                try:
+                    created = router_push.apply_wireguard_client(
+                        session["opener"], session["csrf_token"], session["base_url"], conf, filename, name
+                    )
+                    result = {"ok": True, "message": f"Added to router as \"{created.get('name')}\".", "entry": created}
+                except router_push.RouterPushError as e:
+                    result = {"ok": False, "message": str(e)}
             self._send(200, json.dumps(result), "application/json")
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}), "application/json")
