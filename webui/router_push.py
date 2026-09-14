@@ -172,28 +172,27 @@ def _authed_request(opener, csrf_token, url, method="GET", body=None, timeout=15
 def list_networks(opener, csrf_token, base_url, site="default", timeout=15):
     """Networks available as a traffic-route target (type NETWORK).
 
-    NOT captured directly from a real UI action -- neither capture that
+    Not captured directly from a real UI action -- neither capture that
     created a route happened to include the request that lists networks for
-    the picker (it was presumably already loaded from an earlier page).
-    This reuses GET on the same /rest/networkconf collection the client
-    create POSTs to, which is the well-documented convention for "list
-    everything in this collection" in UniFi's legacy REST API. Confident
-    but unverified against this specific router/firmware -- if it 404s or
-    comes back empty, that assumption was wrong and this needs its own
-    real capture (open the network-routing picker fresh after a page
-    reload, with Preserve Log on, same method as every other capture so
-    far).
+    the picker (it was presumably already loaded from an earlier page). The
+    inference this was built on turned out right, confirmed on a real
+    router: GET on the same /rest/networkconf collection the client-create
+    POSTs to does list every network, following the well-documented
+    UniFi legacy-REST convention.
+
+    Excludes two purposes that aren't real routing targets: "vpn-client"
+    (WireGuard clients themselves -- what you route *through*, not *to*)
+    and "wan" (the uplink itself -- confirmed via a real router returning
+    one named "Internet 1"; routing traffic to your own WAN doesn't mean
+    anything as a traffic-route target).
     """
     base_url = base_url.rstrip("/")
     result = _authed_request(opener, csrf_token, f"{base_url}/proxy/network/api/s/{site}/rest/networkconf")
     entries = result.get("data", [])
-    # Exclude WireGuard clients themselves (purpose "vpn-client") -- those
-    # aren't something you'd route traffic *to*, they're what you're
-    # routing *through*.
     return [
         {"id": e.get("_id"), "name": e.get("name"), "purpose": e.get("purpose")}
         for e in entries
-        if e.get("purpose") != "vpn-client"
+        if e.get("purpose") not in ("vpn-client", "wan")
     ]
 
 
