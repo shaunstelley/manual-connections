@@ -20,6 +20,10 @@
   #status { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
   #status.error { color: #b00020; }
   #status.ok { color: #1a7f37; }
+  section.router { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #ddd; }
+  #routerStatus { margin-top: 1rem; white-space: pre-wrap; font-size: 0.9rem; }
+  #routerStatus.error { color: #b00020; }
+  #routerStatus.ok { color: #1a7f37; }
 </style>
 </head>
 <body>
@@ -50,6 +54,29 @@
   <div class="hint">Generates the config, then briefly brings up a real WireGuard tunnel on this Mac to confirm it actually handshakes before handing you the file. A native macOS authorization prompt (Touch ID capable) will appear — your password never passes through this page or server. Can take up to a minute.</div>
 </form>
 <div id="status"></div>
+
+<section class="router">
+  <h1>Router login (test only)</h1>
+  <div class="hint">
+    Checks that this Mac can reach your router's local Network app and that the
+    documented local-admin login flow works against its real firmware. Does not
+    change any router configuration — pushing the generated config to the router
+    automatically isn't built yet (see HANDOFF.md).
+  </div>
+  <form id="routerForm">
+    <label for="routerUrl">Router URL</label>
+    <input type="text" id="routerUrl" placeholder="https://192.168.1.1" autocomplete="off" required>
+
+    <label for="routerUsername">Local admin username</label>
+    <input type="text" id="routerUsername" autocomplete="off" required>
+
+    <label for="routerPassword">Local admin password</label>
+    <input type="password" id="routerPassword" autocomplete="off" required>
+
+    <button type="submit">Test Login</button>
+  </form>
+  <div id="routerStatus"></div>
+</section>
 
 <script>
 const regionSelect = document.getElementById('region');
@@ -119,6 +146,37 @@ document.getElementById('form').addEventListener('submit', async (e) => {
 document.getElementById('rescan').addEventListener('click', loadRegions);
 
 loadRegions();
+
+const routerStatus = document.getElementById('routerStatus');
+
+document.getElementById('routerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const submitBtn = e.target.querySelector('button[type=submit]');
+  routerStatus.className = '';
+  routerStatus.textContent = 'Logging in…';
+  submitBtn.disabled = true;
+
+  const routerUrl = document.getElementById('routerUrl').value;
+  const username = document.getElementById('routerUsername').value;
+  const password = document.getElementById('routerPassword').value;
+
+  try {
+    const res = await fetch('/api/router/test-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routerUrl, username, password }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'request failed');
+    routerStatus.textContent = result.message;
+    routerStatus.className = result.ok ? 'ok' : 'error';
+  } catch (err) {
+    routerStatus.textContent = 'Failed: ' + err.message;
+    routerStatus.className = 'error';
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>
