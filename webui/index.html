@@ -145,6 +145,15 @@ function selectedRouteTargets() {
   return targets;
 }
 
+// UniFi's internal network "purpose" values aren't the labels a user
+// picked — "corporate" is just the standard/default network type, not
+// literally a corporate network. Only show a subtitle when it says
+// something a home user wouldn't already assume.
+const PURPOSE_LABELS = { guest: 'Guest', 'vlan-only': 'VLAN-only' };
+function purposeLabel(purpose) {
+  return PURPOSE_LABELS[purpose] || '';
+}
+
 document.getElementById('loadTargets').addEventListener('click', async () => {
   targetsStatus.textContent = 'Loading…';
   targetsStatus.className = 'hint';
@@ -158,7 +167,7 @@ document.getElementById('loadTargets').addEventListener('click', async () => {
       return;
     }
     networkList.innerHTML = result.networks.map(n =>
-      `<div class="target-row"><input type="checkbox" value="${n.id}" id="net-${n.id}"><label for="net-${n.id}">${n.name} <span class="sub">${n.purpose || ''}</span></label></div>`
+      `<div class="target-row"><input type="checkbox" value="${n.id}" id="net-${n.id}"><label for="net-${n.id}">${n.name} <span class="sub">${purposeLabel(n.purpose)}</span></label></div>`
     ).join('') || '<div class="hint">No networks found.</div>';
     deviceList.innerHTML = result.devices.map(d =>
       `<div class="target-row"><input type="checkbox" value="${d.mac}" id="dev-${d.mac}"><label for="dev-${d.mac}">${d.name} <span class="sub">${d.network_name || ''} ${d.is_wired ? '(wired)' : '(wireless)'}</span></label></div>`
