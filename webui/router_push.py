@@ -1,24 +1,22 @@
 """UniFi Network app (local controller) API client for pushing a generated
 WireGuard config to a Dream Router's native VPN Client feature.
 
-Only the auth flow (login) is implemented here. Confirmed by capturing a
-real login against a Dream Router running UniFi OS (HAR export, see
-HANDOFF.md) -- this superseded an earlier assumption based on the
-reverse-engineered github.com/tmcpro/unifi-network-api spec, which described
-a plain local-admin login. That assumption turned out to be wrong for an
-account tied to Ubiquiti's SSO: real endpoint is POST /api/auth/login (not
-/api/login), and it can come back requiring a second request with an MFA
-code before it succeeds. Mutating calls proxy through
-/proxy/network/v2/api/site/{site}/... (not /v2/api/site/{site}/... as
-previously assumed) and need the CSRF token echoed back as a header.
+Both the auth flow (login) and the add-VPN-client call are confirmed
+against a real Dream Router running UniFi OS, via two real HAR captures
+(see HANDOFF.md). Neither matched the earlier reverse-engineered
+github.com/tmcpro/unifi-network-api spec this was first based on:
 
-The actual "add WireGuard VPN Client" request -- the part that would let
-apply_wireguard_client() exist -- is deliberately NOT implemented. Nobody
-publicly documents its endpoint or payload shape (checked: Ubiquiti's own
-docs, tmcpro/unifi-network-api, and the awesome-unifi list all come up
-empty), and a GET .../vpn/users seen in the same capture confirms VPN
-endpoints live under that path but doesn't show the add-client shape. See
-HANDOFF.md for how to capture the real request.
+- Login is POST /api/auth/login (not /api/login), needs a priming GET
+  first (see login()'s docstring), and can require a second request with
+  an MFA code for an SSO-linked account.
+- Adding a WireGuard client is POST .../api/s/{site}/rest/networkconf --
+  note this is the *older* REST-collection API style
+  (/proxy/network/api/s/{site}/rest/{collection}), not the v2 API style
+  seen for login and for listing VPN users (/proxy/network/v2/api/site/
+  {site}/...). UniFi's Network app apparently mixes both per feature.
+  The captured payload is refreshingly simple: the entire generated
+  .conf text goes verbatim into wireguard_client_configuration_file --
+  no need to parse out individual WireGuard fields.
 """
 
 import http.cookiejar
@@ -29,6 +27,10 @@ import urllib.request
 
 
 class RouterLoginError(RuntimeError):
+    pass
+
+
+class RouterPushError(RuntimeError):
     pass
 
 
@@ -140,3 +142,60 @@ def login(base_url, username, password, mfa_token="", verify_tls=False, timeout=
         )
 
     return opener, csrf_token
+
+
+def build_wireguard_client_payload(conf_text, filename, name):
+    """The exact body shape captured from a real "Add WireGuard VPN Client"
+    action. Shared by preview (display only) and apply (actually sent) so
+    what's previewed is guaranteed to be what gets sent -- same principle
+    as validate_conf() testing the literal artifact it hands back."""
+    return {
+        "enabled": True,
+        "purpose": "vpn-client",
+        "vpn_type": "wireguard-client",
+        "name": name,
+        "wireguard_client_configuration_file": conf_text,
+        "wireguard_client_configuration_filename": filename,
+        "wireguard_client_mode": "file",
+        "interface_mtu_enabled": False,
+        "mss_clamp_mss": 1380,
+        "mss_clamp": "auto",
+        "mss_clamp_ipv6": "auto",
+    }
+
+
+def apply_wireguard_client(opener, csrf_token, base_url, conf_text, filename, name, site="default", timeout=15):
+    """Actually add the WireGuard VPN Client entry. opener/csrf_token come
+    from a prior login() call on the same session. Returns the created
+    entry (includes the router's own _id, wireguard_id, ip_subnet, etc.)."""
+    base_url = base_url.rstrip("/")
+    payload = build_wireguard_client_payload(conf_text, filename, name)
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/proxy/network/api/s/{site}/rest/networkconf",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "X-Csrf-Token": csrf_token,
+        },
+    )
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            payload_err = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload_err = {}
+        message = payload_err.get("meta", {}).get("msg") or f"HTTP {e.code}"
+        raise RouterPushError(f"Adding VPN client failed: {message}") from e
+    except urllib.error.URLError as e:
+        raise RouterPushError(f"Could not reach router at {base_url}: {e.reason}") from e
+
+    result = json.loads(raw)
+    if result.get("meta", {}).get("rc") != "ok":
+        raise RouterPushError(f"Adding VPN client failed: {result.get('meta')}")
+    return result["data"][0]
