@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
+import router_push
+
 PORT = 8765
 # Same default as get_region.sh's MAX_LATENCY=0.05 (50ms) — a server slower than
 # this is treated as unreachable rather than just "slow". User-adjustable in the UI.
@@ -226,9 +228,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "Not found")
 
     def do_POST(self):
-        if self.path != "/api/generate":
+        if self.path == "/api/generate":
+            self._handle_generate()
+        elif self.path == "/api/router/test-login":
+            self._handle_router_test_login()
+        else:
             self._send(404, "Not found")
-            return
+
+    def _handle_generate(self):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -249,6 +256,22 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
             self._send(200, payload, "application/json")
+        except Exception as e:
+            self._send(400, json.dumps({"error": str(e)}), "application/json")
+
+    def _handle_router_test_login(self):
+        # Only exercises router_push.login() -- confirms this Mac can reach
+        # the router and that the documented auth flow actually works
+        # against its real firmware. Does not touch any router configuration.
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                router_push.login(body["routerUrl"], body["username"], body["password"])
+                result = {"ok": True, "message": "Login succeeded — session and CSRF token acquired."}
+            except router_push.RouterLoginError as e:
+                result = {"ok": False, "message": str(e)}
+            self._send(200, json.dumps(result), "application/json")
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}), "application/json")
 
