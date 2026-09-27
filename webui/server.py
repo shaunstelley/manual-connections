@@ -75,6 +75,7 @@ def fetch_regions_with_latency(timeout_ms=DEFAULT_LATENCY_MS):
         {
             "id": r["id"],
             "name": r["name"],
+            "country": r.get("country"),
             "port_forward": r.get("port_forward", False),
             "latency_ms": latency,
         }

@@ -53,6 +53,7 @@ This is a personal fork of [pia-foss/manual-connections](https://github.com/pia-
    - `router_push.login()` now fails immediately if the priming GET can't reach the router, instead of waiting out a second timeout on the login POST (10s instead of 20s for a wrong address).
    - Router-supplied names (devices, networks) are HTML-escaped before rendering.
    - `launch-webui.command` (repo root): a double-click launcher that starts the server and opens the page.
+   - Region picker has a **United States / Other countries** toggle (defaults to US; `/api/regions` now returns each region's `country` code). US regions are listed fastest-first; other countries are listed alphabetically by country name. Why: latency order used to put US regions first on its own, but on a network whose traffic already goes out through a VPN (the router's), every region measures about the same (~20–35 ms, even Australia), so the order became effectively random.
 
 ## What's next
 

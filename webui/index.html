@@ -27,8 +27,16 @@
   .check { display: flex; align-items: flex-start; gap: 0.5rem; font-weight: normal; }
   .check input { margin-top: 0.25rem; }
   .hint { display: block; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; font-weight: normal; }
-  .latency { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.4rem; font-size: 0.8rem; color: var(--muted); }
-  .latency input { width: 4rem; padding: 0.15rem 0.35rem; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .segmented { display: flex; margin-top: 0.4rem; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .segmented label { flex: 1; display: flex; margin: 0; font-weight: normal; font-size: 0.85rem; }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented span { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0.35rem 0.5rem; cursor: pointer; background: #fff; }
+  .segmented label + label span { border-left: 1px solid var(--line); }
+  .segmented input:checked + span { background: var(--accent); color: #fff; }
+  .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .latency { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.9; color: var(--muted); }
+  .latency input { width: 4rem; margin: 0 0.2rem; padding: 0.1rem 0.35rem; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .latency button { margin-left: 0.2rem; }
   button { font: inherit; padding: 0.55rem 1.1rem; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--fg); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.link { border: none; background: none; padding: 0; color: var(--accent); }
@@ -70,6 +78,10 @@
       </div>
 
       <label for="region">Region</label>
+      <div class="segmented" role="radiogroup" aria-label="Which regions to list">
+        <label><input type="radio" name="regionGroup" value="us" checked><span>United States</span></label>
+        <label><input type="radio" name="regionGroup" value="other"><span>Other countries</span></label>
+      </div>
       <select id="region" required></select>
       <div class="latency">
         Regions slower than <input type="number" id="maxLatency" value="50" min="1" step="1"> ms show as unreachable.
@@ -207,6 +219,29 @@ function refreshSteps() {
 
 // ---- Step 1: generate ----
 
+let regions = [];
+
+const countryNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+function countryName(code) {
+  try { return (countryNames && code && countryNames.of(code)) || code || ''; } catch { return code || ''; }
+}
+
+// US regions keep the server's fastest-first order; other countries sort by
+// country name, since you'd pick those by where they are, not by speed.
+function renderRegions() {
+  const select = $('region');
+  const previous = select.value;
+  const us = document.querySelector('input[name=regionGroup]:checked').value === 'us';
+  const list = regions.filter(r => (r.country === 'US') === us);
+  if (!us) {
+    list.sort((a, b) => countryName(a.country).localeCompare(countryName(b.country)) || a.name.localeCompare(b.name));
+  }
+  select.innerHTML = list.map(r =>
+    `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}${r.port_forward ? ' (PF)' : ''} — ${r.latency_ms != null ? r.latency_ms + ' ms' : 'unreachable'}</option>`
+  ).join('');
+  if (list.some(r => r.id === previous)) select.value = previous;
+}
+
 async function loadRegions() {
   const select = $('region');
   select.disabled = true;
@@ -214,10 +249,8 @@ async function loadRegions() {
   try {
     const res = await fetch('/api/regions?maxLatencyMs=' + encodeURIComponent($('maxLatency').value || 50));
     if (!res.ok) throw new Error(await res.text());
-    const regions = await res.json();
-    select.innerHTML = regions.map(r =>
-      `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}${r.port_forward ? ' (PF)' : ''} — ${r.latency_ms != null ? r.latency_ms + ' ms' : 'unreachable'}</option>`
-    ).join('');
+    regions = await res.json();
+    renderRegions();
   } catch (err) {
     setStatus($('generateStatus'), 'Could not load regions: ' + err.message, 'error');
   } finally {
@@ -226,6 +259,7 @@ async function loadRegions() {
 }
 
 $('rescan').addEventListener('click', loadRegions);
+document.querySelectorAll('input[name=regionGroup]').forEach(r => r.addEventListener('change', renderRegions));
 
 $('generateForm').addEventListener('submit', async (e) => {
   e.preventDefault();
