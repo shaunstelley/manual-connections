@@ -78,12 +78,12 @@ def login(base_url, username, password, mfa_token="", verify_tls=False, timeout=
     try:
         with opener.open(f"{base_url}/", timeout=timeout) as resp:
             resp.read()
-    except (urllib.error.HTTPError, urllib.error.URLError):
-        # Any Set-Cookie header on the response is processed by
-        # HTTPCookieProcessor regardless of status, so a non-2xx/redirect
-        # here doesn't necessarily mean priming failed -- let the real
-        # login attempt below surface the actual problem if it did.
+    except urllib.error.HTTPError:
+        # Set-Cookie is still processed on a non-2xx response, so this
+        # doesn't mean priming failed.
         pass
+    except urllib.error.URLError as e:
+        raise RouterLoginError(f"Could not reach router at {base_url}: {e.reason}") from e
 
     body = json.dumps(
         {

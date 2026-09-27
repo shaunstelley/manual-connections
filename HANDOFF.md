@@ -1,6 +1,6 @@
 # Handoff notes
 
-This is a personal fork of [pia-foss/manual-connections](https://github.com/pia-foss/manual-connections) for generating a PIA WireGuard config for a Ubiquiti Dream Router (UDR), with a local web UI, plus (in progress) automation to push that config directly to the router.
+This is a personal fork of [pia-foss/manual-connections](https://github.com/pia-foss/manual-connections) for generating a PIA WireGuard config for a Ubiquiti Dream Router (UDR), with a local web UI that also pushes that config directly to the router. For how to use it, see [`webui/README.md`](webui/README.md). Items 1–7 below are the build history; item 8 describes the current UI.
 
 - Fork: `shaunstelley/manual-connections` (`origin`), `upstream` = `pia-foss/manual-connections`
 - Branch: `feature/wireguard-config-webui` (pushed, up to date as of this commit)
@@ -43,11 +43,20 @@ This is a personal fork of [pia-foss/manual-connections](https://github.com/pia-
    - Wired into `server.py` as `GET /api/router/targets` (returns `{networks, devices}` for the picker, needs the stashed session from Test Login) and folded into the existing `POST /api/router/push/preview` / `.../apply` via an optional `route: {targets: [...]}` field — `apply` chains both requests (client create, then traffic route using the just-created client's `_id`), and reports a combined result; if the route step fails after the client succeeded, that's surfaced as a partial-success message rather than losing the fact that the client itself was added.
    - `index.html`'s "Push to router" section gained a **Load networks & devices** button revealing checkboxes for both (empty selection = just add the client, no routing, same as before this feature existed). Preview shows both requests when targets are selected (the traffic-route preview's `network_id` is a placeholder string, since the real value doesn't exist until the client is actually created on Apply). Apply's confirm dialog mentions the target count when routing is selected.
    - **Confirmed working end-to-end against the real router** (client create + device-routing capture came from this same real run).
+8. **Workflow/UI cleanup**, once everything above was proven. Supersedes the UI and endpoint names in items 3–7:
+   - `index.html` is now a linear three-step flow: **1. Generate config → 2. Connect to router → 3. Add to router**. Step 3 stays locked until a config is ready and the router is connected, and says which step is missing.
+   - The local handshake test is now an optional "Test on this Mac first" checkbox, on by default (`/api/generate` takes `test: false` to skip it and returns `test: null`). A config that *fails* its test still blocks step 3.
+   - No automatic `.conf` download anymore. A **Download .conf** button appears after generating.
+   - "Test Login" became **Connect**, backed by `POST /api/router/login` (was `/api/router/test-login`). The router address and username are remembered in `localStorage`, never the password. Networks and devices load automatically after connecting (no more "Load networks & devices" button).
+   - Preview → Apply became a plain-language summary plus one **Add to router** button (still behind a `confirm()`). The raw requests are still available under a collapsed "Show request details", which uses `POST /api/router/push/preview`. The entry name now defaults to `PIA <region name>` (`/api/generate` returns `regionName`). After a successful add, the button locks until a new config is generated, to avoid accidental duplicates. A partial success (client added, routing failed) comes back with `routeError` set.
+   - `validate_helper.sh`: dropped the debug-only diagnostics (verbose curl, netstat, `/tmp/pia-validate-diag.log`) and kept the real fixes (IPv4-only probe, real-interface lookup, handshake polling).
+   - `router_push.login()` now fails immediately if the priming GET can't reach the router, instead of waiting out a second timeout on the login POST (10s instead of 20s for a wrong address).
+   - Router-supplied names (devices, networks) are HTML-escaped before rendering.
+   - `launch-webui.command` (repo root): a double-click launcher that starts the server and opens the page.
 
 ## What's next
 
-1. **Decide what to do with the test entries already sitting on the router** from HAR-capture experimentation and the verification runs — at least "WireGuard Client 2" (`_id` `6aa76d93671ecedf496e41de`), plus more from later captures/runs (`6aa770b1671ecedf496e4226`, `6aa77232671ecedf496e4253`, each with their own traffic-route object too, plus whatever the final real verification run created). Probably delete the leftover test ones via the Network app UI, keeping only whichever one is meant to be the real, permanent client.
-2. No delete/update capability is built (`apply_wireguard_client()` and `apply_traffic_route()` only add). Deliberately out of scope unless asked for — this exists to make adding a new client (and optionally routing to it) painless, not to manage the router's VPN client/route lists generally.
-3. Mixing `NETWORK` and `CLIENT` target types in one `target_devices` list is untested — each real capture used only one kind. Should work per the API shape (it's just a list), but hasn't been tried.
+1. No delete/update capability is built (`apply_wireguard_client()` and `apply_traffic_route()` only add). Deliberately out of scope unless asked for — this exists to make adding a new client (and optionally routing to it) painless, not to manage the router's VPN client/route lists generally.
+2. Mixing `NETWORK` and `CLIENT` target types in one `target_devices` list hasn't been tried against the real router — each real capture used only one kind. Should work per the API shape (it's just a list).
 
 **Explicitly rejected approaches** (don't revisit without a new reason): SSH/raw `/etc/wireguard` file editing (bypasses the controller, risks reversion — see `split-vpn` precedent above; re-confirmed during this phase, still true). Note: an earlier version of this doc also rejected cloud/SSO-based auth as "unnecessary — local admin is confirmed available and simpler" — that was wrong. This account's local admin login *is* SSO-linked and needs it; there was no local-only path to avoid it.

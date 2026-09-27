@@ -24,7 +24,7 @@ PORT = 8765
 # How long a router login session (opener + CSRF token) is reused for
 # without asking to log in again. Kept short since it's live auth material
 # for the router; exists at all only because an SSO account's MFA code is
-# one-time-use, so preview-then-apply can't both freshly call login().
+# one-time-use, so each router call after connecting can't log in afresh.
 ROUTER_SESSION_TTL_SECONDS = 600
 # Same default as get_region.sh's MAX_LATENCY=0.05 (50ms) — a server slower than
 # this is treated as unreachable rather than just "slow". User-adjustable in the UI.
@@ -152,7 +152,7 @@ def generate_conf(username, password, region_id, include_dns):
             raise RuntimeError(
                 "Config generation failed:\n" + (result.stderr or result.stdout or "unknown error")
             )
-        return Path(conf_path).read_text(encoding="utf-8")
+        return Path(conf_path).read_text(encoding="utf-8"), region["name"]
     finally:
         Path(conf_path).unlink(missing_ok=True)
 
@@ -260,17 +260,19 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, "Not found")
 
+    def _send_needs_login(self):
+        self._send(
+            200,
+            json.dumps({"ok": False, "needsLogin": True, "message": "Connect to the router first (step 2) — the session may have expired."}),
+            "application/json",
+        )
+
     def _handle_router_targets(self):
         # Networks + devices available to route through a WireGuard client,
-        # for the "route traffic through this VPN" picker. Needs a session
-        # from a prior test-login (see _get_router_session).
+        # for the "route traffic through this VPN" picker.
         session = _get_router_session()
         if session is None:
-            self._send(
-                200,
-                json.dumps({"ok": False, "needsLogin": True, "message": "Please Test Login first (or again — the session expired)."}),
-                "application/json",
-            )
+            self._send_needs_login()
             return
         try:
             networks = router_push.list_networks(session["opener"], session["csrf_token"], session["base_url"])
@@ -282,8 +284,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/api/generate":
             self._handle_generate()
-        elif self.path == "/api/router/test-login":
-            self._handle_router_test_login()
+        elif self.path == "/api/router/login":
+            self._handle_router_login()
         elif self.path == "/api/router/push/preview":
             self._handle_router_push(apply=False)
         elif self.path == "/api/router/push/apply":
@@ -295,33 +297,34 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
-            conf = generate_conf(
+            conf, region_name = generate_conf(
                 body["username"],
                 body["password"],
                 body["region"],
                 bool(body.get("includeDns", True)),
             )
-            # Test the exact file we're about to hand back — not a separately
-            # generated twin — so a pass/fail actually describes this artifact.
-            test_ok, test_message = validate_conf(conf)
+            test = None
+            if body.get("test", True):
+                # Test the exact file we're about to hand back — not a separately
+                # generated twin — so a pass/fail actually describes this artifact.
+                test_ok, test_message = validate_conf(conf)
+                test = {"ok": test_ok, "message": test_message}
             payload = json.dumps(
                 {
                     "conf": conf,
                     "filename": f"pia-{body['region']}.conf",
-                    "test": {"ok": test_ok, "message": test_message},
+                    "regionName": region_name,
+                    "test": test,
                 }
             )
             self._send(200, payload, "application/json")
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}), "application/json")
 
-    def _handle_router_test_login(self):
-        # Confirms this Mac can reach the router and that login actually
-        # works against its real firmware. Does not touch any router
-        # configuration -- but on success, stashes the session in memory so
-        # a subsequent push preview/apply doesn't need a fresh login (an
-        # SSO account's MFA code is one-time-use, so it can't just log in
-        # again for each step).
+    def _handle_router_login(self):
+        # Doesn't change router config by itself. On success, stashes the
+        # session in memory so listing targets and pushing don't need a fresh
+        # login each (an SSO account's MFA code is one-time-use).
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -334,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
                     mfa_token=body.get("mfaToken", ""),
                 )
                 _stash_router_session(opener, csrf_token, router_url)
-                result = {"ok": True, "message": "Login succeeded — session and CSRF token acquired."}
+                result = {"ok": True, "message": f"Connected to {router_url}."}
             except router_push.MfaRequiredError as e:
                 result = {"ok": False, "mfaRequired": True, "message": str(e)}
             except router_push.RouterLoginError as e:
@@ -355,23 +358,16 @@ class Handler(BaseHTTPRequestHandler):
         return targets
 
     def _handle_router_push(self, apply):
-        # preview (apply=False): builds and returns the exact request
-        # body/bodies that would be sent, without sending them. apply
-        # (apply=True): the separate, explicitly-confirmed action that
-        # actually sends them -- see HANDOFF.md for why this stays two
-        # distinct steps rather than one push button. `route` is optional:
-        # when present, also routes the given networks/devices through the
-        # newly-added client via a second request (trafficroutes).
+        # apply=False returns the exact request(s) that apply=True would send,
+        # built by the same functions, for the UI's "request details" view.
+        # `route` is optional: when present, the new client also gets a
+        # trafficroutes entry for the given networks/devices.
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
             session = _get_router_session()
             if session is None:
-                self._send(
-                    200,
-                    json.dumps({"ok": False, "needsLogin": True, "message": "Please Test Login first (or again — the session expired)."}),
-                    "application/json",
-                )
+                self._send_needs_login()
                 return
 
             conf = body["conf"]
@@ -390,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 route_preview = None
                 if targets:
                     route_payload = router_push.build_traffic_route_payload(
-                        name, "<new client's id, assigned after Apply>", targets
+                        name, "<new client's id, assigned by the router>", targets
                     )
                     route_preview = {
                         "method": "POST",
@@ -409,9 +405,10 @@ class Handler(BaseHTTPRequestHandler):
                             route = router_push.apply_traffic_route(
                                 session["opener"], session["csrf_token"], session["base_url"], name, created["_id"], targets
                             )
-                            result["message"] += f" Routed {len(targets)} target(s) through it."
+                            result["message"] += f" Routed {len(targets)} network(s)/device(s) through it."
                             result["route"] = route
                         except router_push.RouterPushError as e:
+                            result["routeError"] = str(e)
                             result["message"] += f" But routing failed: {e}"
                 except router_push.RouterPushError as e:
                     result = {"ok": False, "message": str(e)}

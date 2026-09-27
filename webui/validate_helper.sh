@@ -16,36 +16,19 @@ wg-quick up "$conf_path" > /tmp/pia-validate-up.log 2>&1
 up_rc=$?
 
 if [[ $up_rc -eq 0 ]]; then
-  # On macOS, wg-quick maps the friendly config name to a real kernel
-  # interface (e.g. "utun8") it picks at runtime — only wg-quick itself
-  # understands that mapping. The raw `wg` binary needs the real name, or
-  # every query below fails with "Unable to access interface" regardless of
-  # whether the tunnel is actually up. wg-quick prints the mapping as part
-  # of `up`, so pull it from there instead of guessing.
+  # On macOS the raw `wg` binary only knows the real kernel interface
+  # (e.g. utun8), not the friendly config name — wg-quick prints the mapping.
   real_iface="$(sed -n "s/.*Interface for .* is \(.*\)/\1/p" /tmp/pia-validate-up.log | tail -1)"
   [[ -z $real_iface ]] && real_iface="$iface"
 
-  {
-    echo "--- diag $(date) ---"
-    # -4: PIA WireGuard is IPv4-only (AllowedIPs = 0.0.0.0/0 has no IPv6 route).
-    # On a dual-stack network, plain curl can reach the internet over IPv6
-    # directly, bypassing the tunnel entirely — passing "no handshake" even
-    # though the tunnel itself is fine, because no traffic ever tests it.
-    curl -4 -sv -m 8 -o /dev/null https://www.privateinternetaccess.com 2>&1
-    echo "curl_rc=$?"
-    # A handshake can take a moment on the first packet; poll instead of
-    # checking once immediately after curl returns.
-    for i in 1 2 3 4 5 6; do
-      hs="$(wg show "$real_iface" latest-handshakes)"
-      ts="$(echo "$hs" | awk '{print $2}')"
-      echo "poll $i: $hs"
-      [[ -n $ts && $ts -gt 0 ]] && break
-      sleep 1
-    done
-    wg show "$real_iface" transfer
-    wg show "$real_iface" endpoints
-    netstat -rn -f inet | grep -E "^default|utun" || true
-  } > /tmp/pia-validate-diag.log 2>&1
+  # -4: the tunnel is IPv4-only, so an IPv6 request would bypass it and never
+  # trigger WireGuard's lazy handshake.
+  curl -4 -s -m 8 -o /dev/null https://www.privateinternetaccess.com || true
+  for _ in 1 2 3 4 5; do
+    ts="$(wg show "$real_iface" latest-handshakes | awk '{print $2}')"
+    [[ -n $ts && $ts -gt 0 ]] && break
+    sleep 1
+  done
   wg show "$real_iface" latest-handshakes
 else
   # Surface the real failure reason on stdout/stderr (what the caller sees) —
