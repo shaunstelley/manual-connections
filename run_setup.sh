@@ -430,9 +430,10 @@ export VPN_PROTOCOL
 echo -e "${green}VPN_PROTOCOL=$VPN_PROTOCOL
 ${nc}"
 
-# Check for the required presence of resolvconf for setting DNS on wireguard connections
+# Check for the required presence of resolvconf for setting DNS on wireguard connections.
+# macOS is exempt: wg-quick's darwin implementation sets DNS via networksetup, not resolvconf.
 setDNS="yes"
-if ! command -v resolvconf &>/dev/null && [[ $VPN_PROTOCOL == "wireguard" ]]; then
+if [[ $(uname) != "Darwin" ]] && ! command -v resolvconf &>/dev/null && [[ $VPN_PROTOCOL == "wireguard" ]]; then
   echo -e "${red}The resolvconf package could not be found."
   echo "This script can not set DNS for you and you will"
   echo -e "need to invoke DNS protection some other way.${nc}"

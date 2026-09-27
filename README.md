@@ -1,3 +1,30 @@
+# PIA WireGuard → UniFi
+
+Generate a [Private Internet Access](https://www.privateinternetaccess.com/) WireGuard config and add it to a UniFi router as a VPN client, all from a small web page running on your Mac. You can also pick which networks or devices on your router send their traffic through it. Tested with a UniFi Dream Router on macOS.
+
+This is a fork of PIA's [manual-connections](https://github.com/pia-foss/manual-connections) scripts. PIA's scripts still generate the WireGuard config. This fork adds a web UI on top and sends the result to the router through the same API the UniFi Network app itself uses.
+
+## Quick start (macOS)
+
+    brew install jq wireguard-tools
+    git clone https://github.com/shaunstelley/pia-wireguard-unifi.git
+
+Then double-click `launch-webui.command` in the cloned folder and follow the three steps on the page: generate a config, connect to your router, add it. [webui/README.md](webui/README.md) has the details, including the recommended local-only router account that avoids Ubiquiti's emailed login codes.
+
+## What this fork changes
+
+- **`webui/`**: the local web UI.
+- **`launch-webui.command`**: a double-click launcher for it.
+- **Two fixes to PIA's scripts:**
+  - `connect_to_wireguard_with_token.sh` adds `/32` to the WireGuard `Address` line; some routers' config importers reject it without that.
+  - `run_setup.sh` no longer turns off PIA DNS on macOS because of a Linux-only `resolvconf` check.
+
+Everything else is PIA's original code, unchanged and under their MIT license. PIA's updates come in through GitHub's **Sync fork** button.
+
+---
+
+*The rest of this file is PIA's original README.*
+
 # Manual PIA VPN Connections
 
 This repository contains documentation on how to create native WireGuard and OpenVPN connections, and also on how to enable Port Forwarding in case you require this feature. You will find a lot of information below. However if you prefer quick test, here is the __TL/DR__:

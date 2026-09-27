@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIA WireGuard → UniFi</title>
+<style>
+  :root {
+    --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --bg: #f5f5f7; --card: #fff;
+    --accent: #0a66d8; --ok: #1a7f37; --err: #b00020;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 2.5rem 1rem; }
+  main { max-width: 540px; margin: 0 auto; }
+  header h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  header p { margin: 0 0 0.4rem; color: var(--muted); }
+  header p:last-child { margin-bottom: 1.5rem; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1.25rem 1.25rem 1.4rem; margin-bottom: 1rem; }
+  .step.locked { opacity: 0.55; }
+  .step h2 { font-size: 1.05rem; margin: 0; display: flex; align-items: center; gap: 0.6rem; }
+  .num { width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--fg); color: #fff; font-size: 0.85rem; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step.done .num { background: var(--ok); }
+  label { display: block; margin-top: 0.9rem; font-weight: 600; font-size: 0.9rem; }
+  input[type=text], input[type=password], select { width: 100%; padding: 0.5rem 0.6rem; margin-top: 0.3rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+  .row { display: flex; gap: 0.75rem; }
+  .row > * { flex: 1; min-width: 0; }
+  .check { display: flex; align-items: flex-start; gap: 0.5rem; font-weight: normal; }
+  .check input { margin-top: 0.25rem; }
+  .hint { display: block; font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; font-weight: normal; }
+  .segmented { display: flex; margin-top: 0.4rem; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .segmented label { flex: 1; display: flex; margin: 0; font-weight: normal; font-size: 0.85rem; }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented span { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0.35rem 0.5rem; cursor: pointer; background: #fff; }
+  .segmented label + label span { border-left: 1px solid var(--line); }
+  .segmented input:checked + span { background: var(--accent); color: #fff; }
+  .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .latency { margin-top: 0.4rem; font-size: 0.8rem; line-height: 1.9; color: var(--muted); }
+  .latency input { width: 4rem; margin: 0 0.2rem; padding: 0.1rem 0.35rem; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .latency button { margin-left: 0.2rem; }
+  button { font: inherit; padding: 0.55rem 1.1rem; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.link { border: none; background: none; padding: 0; color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 1.2rem; }
+  .status { margin-top: 0.8rem; white-space: pre-wrap; font-size: 0.88rem; }
+  .status:empty { display: none; }
+  .status.ok { color: var(--ok); }
+  .status.error { color: var(--err); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0.6rem 0 0; padding: 0.3rem 0.75rem 0.5rem; }
+  legend { font-size: 0.8rem; color: var(--muted); padding: 0 0.3rem; }
+  .target { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.2rem 0; margin: 0; font-size: 0.88rem; font-weight: normal; }
+  .target .sub { color: var(--muted); font-size: 0.78rem; }
+  .summary { background: var(--bg); border-radius: 8px; padding: 0.7rem 0.85rem; margin-top: 1.1rem; font-size: 0.88rem; }
+  details { margin-top: 0.75rem; font-size: 0.8rem; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details pre { background: var(--bg); border-radius: 8px; padding: 0.75rem; margin: 0.5rem 0 0; white-space: pre-wrap; word-break: break-all; font-size: 0.75rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>PIA WireGuard → UniFi</h1>
+    <p>Generate a Private Internet Access WireGuard config and add it to your router as a VPN client.</p>
+    <p class="hint">This page remembers the router address and usernames, never passwords. To save those, let Safari store them in the Passwords app, then autofill with Touch ID.</p>
+  </header>
+
+  <section class="step" id="step1">
+    <h2><span class="num">1</span>Generate config</h2>
+    <!-- Credentials only, so Safari treats it as a login form and pops up autofill; Generate joins via form= -->
+    <form id="generateForm">
+      <div class="row">
+        <div>
+          <label for="piaUsername">PIA username</label>
+          <input type="text" id="piaUsername" name="username" autocomplete="section-pia username" required>
+        </div>
+        <div>
+          <label for="piaPassword">PIA password</label>
+          <input type="password" id="piaPassword" name="password" autocomplete="section-pia current-password" required>
+        </div>
+      </div>
+    </form>
+
+    <label for="region">Region</label>
+    <div class="segmented" role="radiogroup" aria-label="Which regions to list">
+      <label><input type="radio" name="regionGroup" value="us" checked><span>United States</span></label>
+      <label><input type="radio" name="regionGroup" value="other"><span>Other countries</span></label>
+    </div>
+    <select id="region"></select>
+    <div class="latency">
+      Regions slower than <input type="number" id="maxLatency" value="50" min="1" step="1"> ms show as unreachable.
+      <button type="button" class="link" id="rescan">Rescan</button>
+    </div>
+
+    <label class="check"><input type="checkbox" id="includeDns" checked> Use PIA's DNS server</label>
+    <label class="check">
+      <input type="checkbox" id="testLocally" checked>
+      <span>Test on this Mac first
+        <span class="hint">Briefly brings the tunnel up here to confirm it connects. macOS asks for your password or Touch ID.</span>
+      </span>
+    </label>
+
+    <div class="actions">
+      <button type="submit" form="generateForm" class="primary" id="generateBtn">Generate config</button>
+      <button type="button" id="downloadConf" hidden>Download .conf</button>
+    </div>
+    <div class="status" id="generateStatus"></div>
+  </section>
+
+  <section class="step" id="step2">
+    <h2><span class="num">2</span>Connect to router</h2>
+    <form id="loginForm">
+      <label for="routerUrl">Router address</label>
+      <input type="text" id="routerUrl" value="https://192.168.1.1" autocomplete="off" required>
+      <div class="row">
+        <div>
+          <label for="routerUsername">Username</label>
+          <input type="text" id="routerUsername" name="username" autocomplete="section-router username" required>
+        </div>
+        <div>
+          <label for="routerPassword">Password</label>
+          <input type="password" id="routerPassword" name="password" autocomplete="section-router current-password" required>
+        </div>
+      </div>
+      <div id="mfaRow" hidden>
+        <label for="mfaCode">Verification code</label>
+        <input type="text" id="mfaCode" autocomplete="one-time-code" inputmode="numeric">
+        <span class="hint">The code Ubiquiti emailed you, or from your authenticator app.</span>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary" id="loginBtn">Connect</button>
+      </div>
+    </form>
+    <div class="status" id="loginStatus"></div>
+  </section>
+
+  <section class="step locked" id="step3">
+    <h2><span class="num">3</span>Add to router</h2>
+    <p class="hint" id="step3Gate"></p>
+    <div id="step3Body" hidden>
+      <label for="entryName">Name on the router</label>
+      <input type="text" id="entryName" autocomplete="off">
+
+      <label>Send through this VPN <span class="hint" style="display:inline">(optional)</span></label>
+      <span class="hint">Leave everything unchecked to add the VPN client without routing anything through it yet.</span>
+      <fieldset><legend>Networks</legend><div id="networkList"></div></fieldset>
+      <fieldset><legend>Devices</legend><div id="deviceList"></div></fieldset>
+      <div class="status" id="targetsStatus"></div>
+
+      <div class="summary" id="summary"></div>
+      <details id="requestDetails">
+        <summary>Show request details (includes the private key)</summary>
+        <pre id="requestPreview">Loading…</pre>
+      </details>
+
+      <div class="actions">
+        <button type="button" class="primary" id="pushBtn">Add to router</button>
+      </div>
+    </div>
+    <div class="status" id="pushStatus"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  conf: null,
+  filename: null,
+  configReady: false, // generated, and either tested OK or the test was skipped
+  connected: false,
+  routerUrl: '',
+  pushed: false,
+};
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text || '';
+  el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.error || 'Request failed');
+  return result;
+}
+
+function remember(key, value) { try { localStorage.setItem(key, value); } catch {} }
+function recall(key) { try { return localStorage.getItem(key) || ''; } catch { return ''; } }
+
+// The server's router session has a short TTL; any router call can come back
+// asking to reconnect.
+function handleNeedsLogin(result) {
+  if (!result.needsLogin) return false;
+  state.connected = false;
+  setStatus($('loginStatus'), 'Session expired — connect again.', 'error');
+  refreshSteps();
+  return true;
+}
+
+function refreshSteps() {
+  const ready = state.configReady && state.connected;
+  $('step1').classList.toggle('done', state.configReady);
+  $('step2').classList.toggle('done', state.connected);
+  $('step3').classList.toggle('locked', !ready);
+  $('step3').classList.toggle('done', state.pushed);
+  $('step3Body').hidden = !ready;
+  $('step3Gate').hidden = ready;
+  $('step3Gate').textContent =
+    !state.configReady && !state.connected ? 'Finish steps 1 and 2 first.' :
+    !state.configReady && state.conf ? 'The config from step 1 failed its test. Generate another first.' :
+    !state.configReady ? 'Generate a config in step 1 first.' :
+    'Connect to the router in step 2 first.';
+  $('pushBtn').disabled = !ready || state.pushed;
+  if (ready) updateSummary();
+}
+
+// ---- Step 1: generate ----
+
+let regions = [];
+
+const countryNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+function countryName(code) {
+  try { return (countryNames && code && countryNames.of(code)) || code || ''; } catch { return code || ''; }
+}
+
+// US regions keep the server's fastest-first order; other countries sort by
+// country name, since you'd pick those by where they are, not by speed.
+function renderRegions() {
+  const select = $('region');
+  const previous = select.value;
+  const us = document.querySelector('input[name=regionGroup]:checked').value === 'us';
+  const list = regions.filter(r => (r.country === 'US') === us);
+  if (!us) {
+    list.sort((a, b) => countryName(a.country).localeCompare(countryName(b.country)) || a.name.localeCompare(b.name));
+  }
+  select.innerHTML = list.map(r =>
+    `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}${r.port_forward ? ' (PF)' : ''} — ${r.latency_ms != null ? r.latency_ms + ' ms' : 'unreachable'}</option>`
+  ).join('');
+  if (list.some(r => r.id === previous)) select.value = previous;
+}
+
+async function loadRegions() {
+  const select = $('region');
+  select.disabled = true;
+  select.innerHTML = '<option>Measuring latency…</option>';
+  try {
+    const res = await fetch('/api/regions?maxLatencyMs=' + encodeURIComponent($('maxLatency').value || 50));
+    if (!res.ok) throw new Error(await res.text());
+    regions = await res.json();
+    renderRegions();
+  } catch (err) {
+    setStatus($('generateStatus'), 'Could not load regions: ' + err.message, 'error');
+  } finally {
+    select.disabled = false;
+  }
+}
+
+$('piaUsername').value = recall('piaUsername');
+$('rescan').addEventListener('click', loadRegions);
+document.querySelectorAll('input[name=regionGroup]').forEach(r => r.addEventListener('change', renderRegions));
+
+$('generateForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!regions.some(r => r.id === $('region').value)) {
+    setStatus($('generateStatus'), 'Regions are still loading. Try again in a moment.', 'error');
+    return;
+  }
+  const test = $('testLocally').checked;
+  $('generateBtn').disabled = true;
+  $('downloadConf').hidden = true;
+  Object.assign(state, { conf: null, configReady: false, pushed: false });
+  setStatus($('pushStatus'), '');
+  refreshSteps();
+  setStatus($('generateStatus'), test
+    ? 'Generating and testing — approve the macOS prompt when it appears. This can take up to a minute…'
+    : 'Generating…');
+
+  try {
+    const result = await postJson('/api/generate', {
+      username: $('piaUsername').value.trim(),
+      password: $('piaPassword').value,
+      region: $('region').value,
+      includeDns: $('includeDns').checked,
+      test,
+    });
+    remember('piaUsername', $('piaUsername').value.trim());
+    state.conf = result.conf;
+    state.filename = result.filename;
+    $('entryName').value = `PIA ${result.regionName}`;
+    $('downloadConf').hidden = false;
+
+    if (!result.test) {
+      state.configReady = true;
+      setStatus($('generateStatus'), 'Config ready (not tested on this Mac).', 'ok');
+    } else if (result.test.ok) {
+      state.configReady = true;
+      setStatus($('generateStatus'), 'Config ready. ' + result.test.message, 'ok');
+    } else {
+      setStatus($('generateStatus'), `Test failed: ${result.test.message}\nTry another region, or uncheck the test to skip it.`, 'error');
+    }
+  } catch (err) {
+    setStatus($('generateStatus'), 'Failed: ' + err.message, 'error');
+  } finally {
+    $('generateBtn').disabled = false;
+    refreshSteps();
+  }
+});
+
+$('downloadConf').addEventListener('click', () => {
+  const url = URL.createObjectURL(new Blob([state.conf], { type: 'application/octet-stream' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: state.filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// ---- Step 2: connect ----
+
+$('routerUrl').value = recall('routerUrl') || $('routerUrl').defaultValue;
+$('routerUsername').value = recall('routerUsername');
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const routerUrl = $('routerUrl').value.trim();
+  const username = $('routerUsername').value.trim();
+  $('loginBtn').disabled = true;
+  state.connected = false;
+  refreshSteps();
+  setStatus($('loginStatus'), 'Connecting…');
+
+  try {
+    const result = await postJson('/api/router/login', {
+      routerUrl,
+      username,
+      password: $('routerPassword').value,
+      mfaToken: $('mfaCode').value.trim(),
+    });
+    if (result.mfaRequired) {
+      $('mfaRow').hidden = false;
+      $('loginBtn').textContent = 'Verify';
+      $('mfaCode').focus();
+      setStatus($('loginStatus'), 'Enter the verification code to finish connecting.');
+      return;
+    }
+    if (!result.ok) {
+      setStatus($('loginStatus'), result.message, 'error');
+      return;
+    }
+    remember('routerUrl', routerUrl);
+    remember('routerUsername', username);
+    $('mfaRow').hidden = true;
+    $('mfaCode').value = '';
+    $('loginBtn').textContent = 'Connect';
+    Object.assign(state, { connected: true, routerUrl });
+    setStatus($('loginStatus'), result.message, 'ok');
+    loadTargets();
+  } catch (err) {
+    setStatus($('loginStatus'), 'Failed: ' + err.message, 'error');
+  } finally {
+    $('loginBtn').disabled = false;
+    refreshSteps();
+  }
+});
+
+// ---- Step 3: add to router ----
+
+// UniFi's internal network "purpose" isn't a label a user picked — "corporate"
+// is just its name for a standard network. Only show the ones that tell a
+// home user something.
+const PURPOSE_LABELS = { guest: 'Guest', 'vlan-only': 'VLAN-only' };
+
+function targetRow(type, value, name, sub) {
+  return `<label class="target"><input type="checkbox" data-type="${type}" data-name="${escapeHtml(name)}" value="${escapeHtml(value)}">`
+    + `${escapeHtml(name)} <span class="sub">${escapeHtml(sub)}</span></label>`;
+}
+
+async function loadTargets() {
+  $('networkList').innerHTML = '';
+  $('deviceList').innerHTML = '';
+  setStatus($('targetsStatus'), 'Loading networks and devices…');
+  try {
+    const res = await fetch('/api/router/targets');
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Request failed');
+    if (handleNeedsLogin(result)) return;
+    if (!result.ok) throw new Error(result.message);
+    $('networkList').innerHTML = result.networks
+      .map(n => targetRow('NETWORK', n.id, n.name, PURPOSE_LABELS[n.purpose] || ''))
+      .join('') || '<span class="hint">No networks found.</span>';
+    $('deviceList').innerHTML = result.devices
+      .map(d => targetRow('CLIENT', d.mac, d.name, [d.network_name, d.is_wired ? 'wired' : 'wireless'].filter(Boolean).join(' · ')))
+      .join('') || '<span class="hint">No active devices found.</span>';
+    setStatus($('targetsStatus'), '');
+  } catch (err) {
+    setStatus($('targetsStatus'), 'Could not load networks and devices: ' + err.message, 'error');
+  }
+  updateSummary();
+}
+
+function selectedTargets() {
+  return [...document.querySelectorAll('#networkList input:checked, #deviceList input:checked')].map(cb =>
+    cb.dataset.type === 'NETWORK'
+      ? { type: 'NETWORK', id: cb.value, name: cb.dataset.name }
+      : { type: 'CLIENT', mac: cb.value, name: cb.dataset.name });
+}
+
+function joinNames(names) {
+  return names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+}
+
+function entryName() {
+  return $('entryName').value.trim() || state.filename;
+}
+
+function pushBody() {
+  return { conf: state.conf, filename: state.filename, name: entryName(), route: { targets: selectedTargets() } };
+}
+
+function updateSummary() {
+  const targets = selectedTargets();
+  const routing = targets.length
+    ? `Sends ${joinNames(targets.map(t => t.type === 'NETWORK' ? `the ${t.name} network` : t.name))} through it. If the VPN drops, their internet stops rather than bypassing it.`
+    : 'Nothing is routed through it yet.';
+  $('summary').textContent = `Adds “${entryName()}” as a WireGuard VPN client on ${state.routerUrl}. ${routing}`;
+  if ($('requestDetails').open) loadRequestDetails();
+}
+
+let detailsTimer;
+function loadRequestDetails() {
+  clearTimeout(detailsTimer);
+  detailsTimer = setTimeout(async () => {
+    try {
+      const result = await postJson('/api/router/push/preview', pushBody());
+      if (handleNeedsLogin(result)) return;
+      if (!result.ok) throw new Error(result.message);
+      $('requestPreview').textContent = [result.preview, result.routePreview]
+        .filter(Boolean)
+        .map(p => `${p.method} ${p.url}\n\n${JSON.stringify(p.body, null, 2)}`)
+        .join('\n\n————\n\n');
+    } catch (err) {
+      $('requestPreview').textContent = 'Could not build the request: ' + err.message;
+    }
+  }, 200);
+}
+
+$('entryName').addEventListener('input', updateSummary);
+$('step3Body').addEventListener('change', (e) => { if (e.target.matches('input[type=checkbox]')) updateSummary(); });
+$('requestDetails').addEventListener('toggle', () => { if ($('requestDetails').open) loadRequestDetails(); });
+
+$('pushBtn').addEventListener('click', async () => {
+  if (!confirm($('summary').textContent + '\n\nAdd it now?')) return;
+  $('pushBtn').disabled = true;
+  setStatus($('pushStatus'), 'Adding to router…');
+  try {
+    const result = await postJson('/api/router/push/apply', pushBody());
+    if (handleNeedsLogin(result)) return;
+    if (!result.ok) {
+      setStatus($('pushStatus'), result.message, 'error');
+      return;
+    }
+    state.pushed = true;
+    setStatus($('pushStatus'), result.message + '\nGenerate a new config to add another.', result.routeError ? 'error' : 'ok');
+  } catch (err) {
+    setStatus($('pushStatus'), 'Failed: ' + err.message, 'error');
+  } finally {
+    refreshSteps();
+  }
+});
+
+refreshSteps();
+loadRegions();
+</script>
+</body>
+</html>
