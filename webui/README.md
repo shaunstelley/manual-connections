@@ -19,8 +19,18 @@ then open http://localhost:8765. Close the Terminal window (or press Ctrl+C) to 
 ## Steps
 
 1. **Generate config**: PIA login, region, and optionally a local test that briefly brings the tunnel up on this Mac to confirm it handshakes (macOS asks for your password or Touch ID). **Download .conf** saves the file if you want it.
-2. **Connect to router**: router address and local admin login. A Ubiquiti SSO-linked account asks for an emailed verification code as a second step.
+2. **Connect to router**: router address and admin login. Use a local-only account (see [Router account](#router-account)) to skip Ubiquiti's emailed verification code. A Ubiquiti SSO-linked account works too, but asks for that code every time.
 3. **Add to router**: name the entry, optionally tick networks or devices to send through the VPN (with the kill switch on, the router's default), then **Add to router**. "Show request details" shows the exact requests before they're sent.
+
+## Router account
+
+Signing in with your Ubiquiti (SSO) account triggers an emailed verification code on every connect. A local-only admin account signs in against the router itself, so there's no code. In the UniFi console:
+
+1. Open **Admins & Users** and add a new admin.
+2. Tick **Restrict to local access only**, then set a username and password.
+3. Give it admin rights for the **Network** app only. It needs to add VPN clients and traffic routes, so view-only isn't enough, and it needs nothing in the other apps.
+
+It's protected by its password alone, but it only works from inside your network.
 
 ## Privacy
 
