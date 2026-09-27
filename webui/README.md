@@ -24,7 +24,11 @@ then open http://localhost:8765. Close the Terminal window (or press Ctrl+C) to 
 
 ## Privacy
 
-- The server listens on `127.0.0.1` only.
+- The server listens on `127.0.0.1` only, and refuses requests from other websites open in your browser: it checks the `Host` and `Origin` headers and only accepts JSON posts, so another page can't use the router session.
 - PIA and router passwords are used for the one request that needs them and are never logged or written to disk.
 - The router session is kept in memory for 10 minutes, so steps 2 and 3 don't need a second MFA code.
-- The browser remembers the router address and username (in localStorage), not the password.
+- The browser remembers the router address and both usernames (in localStorage), never passwords.
+
+### Saving passwords
+
+Let Safari save them to the Passwords app (iCloud Keychain), then autofill with Touch ID. Both logins are for the same site (`localhost:8765`), so you'll see two saved entries there; pick the matching one when autofilling. If Safari doesn't offer to save after you log in, add them yourself in the Passwords app with the website `localhost`.

@@ -14,7 +14,8 @@
   body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 2.5rem 1rem; }
   main { max-width: 540px; margin: 0 auto; }
   header h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
-  header p { margin: 0 0 1.5rem; color: var(--muted); }
+  header p { margin: 0 0 0.4rem; color: var(--muted); }
+  header p:last-child { margin-bottom: 1.5rem; }
   .step { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1.25rem 1.25rem 1.4rem; margin-bottom: 1rem; }
   .step.locked { opacity: 0.55; }
   .step h2 { font-size: 1.05rem; margin: 0; display: flex; align-items: center; gap: 0.6rem; }
@@ -61,6 +62,7 @@
   <header>
     <h1>PIA WireGuard → UniFi</h1>
     <p>Generate a Private Internet Access WireGuard config and add it to your router as a VPN client.</p>
+    <p class="hint">This page remembers the router address and usernames, never passwords. To save those, let Safari store them in the Passwords app, then autofill with Touch ID.</p>
   </header>
 
   <section class="step" id="step1">
@@ -69,11 +71,11 @@
       <div class="row">
         <div>
           <label for="piaUsername">PIA username</label>
-          <input type="text" id="piaUsername" autocomplete="username" required>
+          <input type="text" id="piaUsername" name="username" autocomplete="section-pia username" required>
         </div>
         <div>
           <label for="piaPassword">PIA password</label>
-          <input type="password" id="piaPassword" autocomplete="current-password" required>
+          <input type="password" id="piaPassword" name="password" autocomplete="section-pia current-password" required>
         </div>
       </div>
 
@@ -112,11 +114,11 @@
       <div class="row">
         <div>
           <label for="routerUsername">Username</label>
-          <input type="text" id="routerUsername" autocomplete="off" required>
+          <input type="text" id="routerUsername" name="username" autocomplete="section-router username" required>
         </div>
         <div>
           <label for="routerPassword">Password</label>
-          <input type="password" id="routerPassword" autocomplete="off" required>
+          <input type="password" id="routerPassword" name="password" autocomplete="section-router current-password" required>
         </div>
       </div>
       <div id="mfaRow" hidden>
@@ -127,7 +129,6 @@
       <div class="actions">
         <button type="submit" class="primary" id="loginBtn">Connect</button>
       </div>
-      <span class="hint">The router address and username are remembered in this browser. The password isn't.</span>
     </form>
     <div class="status" id="loginStatus"></div>
   </section>
@@ -258,6 +259,7 @@ async function loadRegions() {
   }
 }
 
+$('piaUsername').value = recall('piaUsername');
 $('rescan').addEventListener('click', loadRegions);
 document.querySelectorAll('input[name=regionGroup]').forEach(r => r.addEventListener('change', renderRegions));
 
@@ -275,12 +277,13 @@ $('generateForm').addEventListener('submit', async (e) => {
 
   try {
     const result = await postJson('/api/generate', {
-      username: $('piaUsername').value,
+      username: $('piaUsername').value.trim(),
       password: $('piaPassword').value,
       region: $('region').value,
       includeDns: $('includeDns').checked,
       test,
     });
+    remember('piaUsername', $('piaUsername').value.trim());
     state.conf = result.conf;
     state.filename = result.filename;
     $('entryName').value = `PIA ${result.regionName}`;

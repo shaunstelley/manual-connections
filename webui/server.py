@@ -26,6 +26,8 @@ PORT = 8765
 # for the router; exists at all only because an SSO account's MFA code is
 # one-time-use, so each router call after connecting can't log in afresh.
 ROUTER_SESSION_TTL_SECONDS = 600
+ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+ALLOWED_ORIGINS = {f"http://{host}" for host in ALLOWED_HOSTS}
 # Same default as get_region.sh's MAX_LATENCY=0.05 (50ms) — a server slower than
 # this is treated as unreachable rather than just "slow". User-adjustable in the UI.
 DEFAULT_LATENCY_MS = 50
@@ -240,7 +242,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _refuse_foreign_request(self, post):
+        # Listening on 127.0.0.1 doesn't stop other pages open in the browser
+        # from sending requests here — which would otherwise ride the stashed
+        # router session. Checking Host blocks DNS rebinding; for POSTs, a
+        # same-origin Origin plus a required JSON content type (which forces a
+        # CORS preflight this server never answers) blocks cross-site requests.
+        # A missing Origin (e.g. curl) is allowed: local processes are trusted.
+        reason = None
+        if self.headers.get("Host") not in ALLOWED_HOSTS:
+            reason = "Unexpected Host header."
+        elif post:
+            origin = self.headers.get("Origin")
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if origin is not None and origin not in ALLOWED_ORIGINS:
+                reason = "Cross-origin request refused."
+            elif content_type != "application/json":
+                reason = "Expected Content-Type: application/json."
+        if reason:
+            self._send(403, reason)
+            return True
+        return False
+
     def do_GET(self):
+        if self._refuse_foreign_request(post=False):
+            return
         parsed = urlsplit(self.path)
         if parsed.path == "/":
             self._send(200, INDEX_HTML.read_text(encoding="utf-8"), "text/html; charset=utf-8")
@@ -283,6 +309,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": False, "message": str(e)}), "application/json")
 
     def do_POST(self):
+        if self._refuse_foreign_request(post=True):
+            return
         if self.path == "/api/generate":
             self._handle_generate()
         elif self.path == "/api/router/login":
