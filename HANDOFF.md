@@ -2,7 +2,7 @@
 
 This is a personal fork of [pia-foss/manual-connections](https://github.com/pia-foss/manual-connections) for generating a PIA WireGuard config for a Ubiquiti Dream Router (UDR), with a local web UI that also pushes that config directly to the router. For how to use it, see [`webui/README.md`](webui/README.md). Items 1–7 below are the build history; item 8 describes the current UI.
 
-- Fork: `shaunstelley/manual-connections` (`origin`), `upstream` = `pia-foss/manual-connections`
+- Fork: `shaunstelley/pia-wireguard-unifi` (`origin`; renamed from `manual-connections`, still a fork), `upstream` = `pia-foss/manual-connections`
 - Branch: `feature/wireguard-config-webui` (pushed, up to date as of this commit)
 - Developed on Windows, **meant to run on macOS** — `webui/` and `validate_helper.sh` assume `wg-quick`, `wg`, `curl`, `jq`, and macOS's `osascript` specifically (for admin-privileges prompts).
 
