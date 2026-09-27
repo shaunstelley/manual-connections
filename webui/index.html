@@ -111,7 +111,7 @@
     <h2><span class="num">2</span>Connect to router</h2>
     <form id="loginForm">
       <label for="routerUrl">Router address</label>
-      <input type="text" id="routerUrl" placeholder="https://192.168.1.1" autocomplete="off" required>
+      <input type="text" id="routerUrl" value="https://192.168.1.1" autocomplete="off" required>
       <div class="row">
         <div>
           <label for="routerUsername">Username</label>
@@ -322,7 +322,7 @@ $('downloadConf').addEventListener('click', () => {
 
 // ---- Step 2: connect ----
 
-$('routerUrl').value = recall('routerUrl');
+$('routerUrl').value = recall('routerUrl') || $('routerUrl').defaultValue;
 $('routerUsername').value = recall('routerUsername');
 
 $('loginForm').addEventListener('submit', async (e) => {
