@@ -67,6 +67,7 @@
 
   <section class="step" id="step1">
     <h2><span class="num">1</span>Generate config</h2>
+    <!-- Credentials only, so Safari treats it as a login form and pops up autofill; Generate joins via form= -->
     <form id="generateForm">
       <div class="row">
         <div>
@@ -78,31 +79,31 @@
           <input type="password" id="piaPassword" name="password" autocomplete="section-pia current-password" required>
         </div>
       </div>
-
-      <label for="region">Region</label>
-      <div class="segmented" role="radiogroup" aria-label="Which regions to list">
-        <label><input type="radio" name="regionGroup" value="us" checked><span>United States</span></label>
-        <label><input type="radio" name="regionGroup" value="other"><span>Other countries</span></label>
-      </div>
-      <select id="region" required></select>
-      <div class="latency">
-        Regions slower than <input type="number" id="maxLatency" value="50" min="1" step="1"> ms show as unreachable.
-        <button type="button" class="link" id="rescan">Rescan</button>
-      </div>
-
-      <label class="check"><input type="checkbox" id="includeDns" checked> Use PIA's DNS server</label>
-      <label class="check">
-        <input type="checkbox" id="testLocally" checked>
-        <span>Test on this Mac first
-          <span class="hint">Briefly brings the tunnel up here to confirm it connects. macOS asks for your password or Touch ID.</span>
-        </span>
-      </label>
-
-      <div class="actions">
-        <button type="submit" class="primary" id="generateBtn">Generate config</button>
-        <button type="button" id="downloadConf" hidden>Download .conf</button>
-      </div>
     </form>
+
+    <label for="region">Region</label>
+    <div class="segmented" role="radiogroup" aria-label="Which regions to list">
+      <label><input type="radio" name="regionGroup" value="us" checked><span>United States</span></label>
+      <label><input type="radio" name="regionGroup" value="other"><span>Other countries</span></label>
+    </div>
+    <select id="region"></select>
+    <div class="latency">
+      Regions slower than <input type="number" id="maxLatency" value="50" min="1" step="1"> ms show as unreachable.
+      <button type="button" class="link" id="rescan">Rescan</button>
+    </div>
+
+    <label class="check"><input type="checkbox" id="includeDns" checked> Use PIA's DNS server</label>
+    <label class="check">
+      <input type="checkbox" id="testLocally" checked>
+      <span>Test on this Mac first
+        <span class="hint">Briefly brings the tunnel up here to confirm it connects. macOS asks for your password or Touch ID.</span>
+      </span>
+    </label>
+
+    <div class="actions">
+      <button type="submit" form="generateForm" class="primary" id="generateBtn">Generate config</button>
+      <button type="button" id="downloadConf" hidden>Download .conf</button>
+    </div>
     <div class="status" id="generateStatus"></div>
   </section>
 
@@ -265,6 +266,10 @@ document.querySelectorAll('input[name=regionGroup]').forEach(r => r.addEventList
 
 $('generateForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!regions.some(r => r.id === $('region').value)) {
+    setStatus($('generateStatus'), 'Regions are still loading. Try again in a moment.', 'error');
+    return;
+  }
   const test = $('testLocally').checked;
   $('generateBtn').disabled = true;
   $('downloadConf').hidden = true;

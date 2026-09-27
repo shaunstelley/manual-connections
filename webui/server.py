@@ -243,12 +243,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _refuse_foreign_request(self, post):
-        # Listening on 127.0.0.1 doesn't stop other pages open in the browser
-        # from sending requests here — which would otherwise ride the stashed
-        # router session. Checking Host blocks DNS rebinding; for POSTs, a
-        # same-origin Origin plus a required JSON content type (which forces a
-        # CORS preflight this server never answers) blocks cross-site requests.
-        # A missing Origin (e.g. curl) is allowed: local processes are trusted.
+        # Stops other sites' pages (and DNS rebinding) from using this server and its stashed router session.
+        # JSON-only POSTs force a CORS preflight, which this server never answers.
         reason = None
         if self.headers.get("Host") not in ALLOWED_HOSTS:
             reason = "Unexpected Host header."
